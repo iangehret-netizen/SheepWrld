@@ -1,0 +1,32 @@
+name: Apply roster save fix
+
+on:
+  push:
+    paths:
+      - 'scripts/patch-roster-save.mjs'
+      - '.github/workflows/apply-roster-patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Apply roster fix
+        run: node scripts/patch-roster-save.mjs
+      - name: Commit patched app
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add sheepwrld
+          if git diff --cached --quiet; then
+            echo 'No changes to commit'
+            exit 0
+          fi
+          git commit -m 'Fix exhibitor and sheep roster save flow'
+          git push
