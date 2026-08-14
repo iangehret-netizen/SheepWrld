@@ -33,4 +33,36 @@ function herdRoster(){const a=S.herd.filter(x=>x.active!==false).sort((x,y)=>Str
 function breedingView(){return`<div class="card"><div class="row" style="justify-content:space-between"><div><h2>Breeding Records</h2><div class="muted">Buck Used is free text.</div></div>${B('+ Add Breeding Record','breedModal()','btn dark')}</div><div class="tablewrap"><table class="table"><thead><tr><th>Ewe</th><th>Breeding Date</th><th>Via</th><th>Buck Used</th><th>Expected Lambing</th></tr></thead><tbody>${S.breeding.map(r=>`<tr><td>${esc(r.ewe)}</td><td>${esc(r.breedingDate)}</td><td>${esc(r.via)}</td><td>${esc(r.buck)}</td><td>${esc(r.expectedLambing||'—')}</td></tr>`).join('')}</tbody></table></div>${!S.breeding.length?'<div class="empty">No breeding records.</div>':''}</div>`}function breedModal(){modal(`<h2>Add Breeding Record</h2><div class="grid g2">${F('Ewe',`<input id="be" class="input">`)}${F('Ewe Tag',`<input id="bet" class="input">`)}${F('Breeding Date',`<input id="bd" class="input" type="date">`)}${F('Via',`<select id="bv" class="select"><option>A.I.</option><option>Natural</option><option>Embryo Transfer</option></select>`)}${F('Buck Used',`<input id="bb" class="input">`)}${F('Expected Lambing',`<input id="bex" class="input" type="date">`)}${F('Ultrasound',`<input id="bu" class="input">`)}${F('Actual Lambing',`<input id="ba" class="input" type="date">`)}</div>${F('Notes',`<textarea id="bn" class="textarea"></textarea>`)}<div class="modalactions">${B('Cancel','closeModal()')}${B('Save','saveBreed()','btn dark')}</div>`)}function saveBreed(){S.breeding.push({id:uid(),ewe:document.getElementById('be').value,eweTag:document.getElementById('bet').value,breedingDate:document.getElementById('bd').value,via:document.getElementById('bv').value,buck:document.getElementById('bb').value,expectedLambing:document.getElementById('bex').value,ultrasound:document.getElementById('bu').value,actualLambing:document.getElementById('ba').value,notes:document.getElementById('bn').value});save();closeModal();render()}function lambingView(){return`<div class="card"><h2>Lambing</h2><div class="notice">Lambing workspace. Breeding records remain in their own tab.</div></div>`}function learnView(){return`<div class="card"><h2>Learn</h2><div class="list"><div class="item"><strong>Estrous Cycle Basics</strong><div class="muted">Ewes are seasonally polyestrous; a typical cycle is about 17 days.</div></div><div class="item"><strong>Gestation Length</strong><div class="muted">Average gestation is about 147 days.</div></div><div class="item"><strong>Colostrum Timing</strong><div class="muted">Newborn lambs should receive colostrum promptly after birth.</div></div></div></div>`}
 function modal(html){document.getElementById('modalRoot').innerHTML=`<div class="modalback" onclick="if(event.target===this)closeModal()"><div class="modal">${html}</div></div>`}function closeModal(){document.getElementById('modalRoot').innerHTML=''}function exportPDF(){window.print()}function exportExcel(){const wb=XLSX.utils.book_new(),ex=exs(),sh=shs();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(ex),'Exhibitors');XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(sh),'Sheep');const w=[];sh.forEach(s=>wh(s.id).forEach(x=>w.push({Sheep:s.name,Date:x.date,WeightLb:x.weight})));XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(w),'Weights');const f=[];sh.forEach(s=>fh(s.id).forEach(x=>f.push({Sheep:s.name,Date:x.date,Feed:x.feedName,FeedLb:x.feedLbs,FeedOz:x.feedOz,SupplementOz:x.supplementOz,DrenchCc:x.drenchCc,HayHandfuls:x.hay})));XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(f),'Feeds');XLSX.writeFile(wb,'Gehret_Sheep_Co_'+S.year+'.xlsx')}
 render();
+</script><script>/* Gehret Sheep Co roster save repair */
+(function(){
+  const NOTE_TEXT='Save the exhibitor first; sheep can be assigned afterward.';
+  function removeRosterNote(){
+    document.querySelectorAll('.notice').forEach(el=>{ if((el.textContent||'').includes(NOTE_TEXT)) el.remove(); });
+  }
+  window.saveEx=function(id){
+    try{
+      const name=(document.getElementById('ex_name')?.value||'').trim();
+      if(!name){ alert('Please enter an exhibitor name.'); return; }
+      const old=(window.S.exhibitors||[]).find(e=>e.id===id);
+      const e={id,year:window.S.year,name,age:document.getElementById('ex_age')?.value||'',county:document.getElementById('ex_county')?.value||'',numSheep:document.getElementById('ex_num')?.value||'',targetShow:document.getElementById('ex_target')?.value||'',targetShowDate:document.getElementById('ex_date')?.value||'',sheepIds:old?.sheepIds||[]};
+      const i=window.S.exhibitors.findIndex(x=>x.id===id); if(i<0)window.S.exhibitors.push(e);else window.S.exhibitors[i]=e;
+      localStorage.setItem('gehret-sheep-co-v2',JSON.stringify(window.S)); window.closeModal(); window.toast('Exhibitor saved'); window.render();
+    }catch(err){console.error(err);alert('The exhibitor could not be saved. Please refresh the app and try again.');}
+  };
+  window.saveSheep=function(id){
+    try{
+      const name=(document.getElementById('s_name')?.value||'').trim();
+      if(!name){ alert('Please enter a sheep name.'); return; }
+      const old=(window.S.sheep||[]).find(s=>s.id===id);
+      const s={id,year:window.S.year,name,sex:document.getElementById('s_sex')?.value||'Wether',lEar:document.getElementById('s_le')?.value||'',rEar:document.getElementById('s_re')?.value||'',birthdate:document.getElementById('s_birth')?.value||'',breed:document.getElementById('s_breed')?.value||'',sire:document.getElementById('s_sire')?.value||'',dam:document.getElementById('s_dam')?.value||'',breeder:document.getElementById('s_breeder')?.value||'',price:document.getElementById('s_price')?.value||'',showman:document.getElementById('s_showman')?.value||'',county:document.getElementById('s_county')?.value||'',targetWeight:document.getElementById('s_tw')?.value||'',targetDate:document.getElementById('s_td')?.value||'',active:(document.getElementById('s_active')?.value||'true')==='true',notes:document.getElementById('s_notes')?.value||''};
+      const i=window.S.sheep.findIndex(x=>x.id===id); if(i<0)window.S.sheep.push(s);else window.S.sheep[i]=s;
+      if(old?.showman&&old.showman!==s.showman){const p=window.S.exhibitors.find(e=>e.id===old.showman);if(p)p.sheepIds=(p.sheepIds||[]).filter(x=>x!==id);}
+      const ex=window.S.exhibitors.find(e=>e.id===s.showman);if(ex){ex.sheepIds=ex.sheepIds||[];if(!ex.sheepIds.includes(id))ex.sheepIds.push(id);}
+      localStorage.setItem('gehret-sheep-co-v2',JSON.stringify(window.S)); window.closeModal();window.toast('Sheep saved');window.render();
+    }catch(err){console.error(err);alert('The sheep could not be saved. Please refresh the app and try again.');}
+  };
+  const oldRender=window.render;
+  window.render=function(){oldRender();setTimeout(removeRosterNote,0);};
+  setTimeout(removeRosterNote,0);
+})();
 </script></body></html>
