@@ -1,0 +1,1853 @@
+import * as XLSX from "xlsx";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import {
+  Plus, Trash2, TrendingUp, Target, Save, Loader2, AlertCircle, X, Calendar,
+  Pencil, Calculator, ShieldAlert, CheckCircle2, Syringe, Search, ChevronDown,
+  ExternalLink, MapPin, BookOpen, Heart, Baby, FileDown, FileSpreadsheet, Trophy, Check,
+} from "lucide-react";
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+} from "recharts";
+
+// =============================================================================
+// THEME
+// =============================================================================
+const gold = "#B8963F";
+const goldLight = "#D9C089";
+const black = "#1B1B1B";
+const cream = "#FAF8F3";
+const PALETTE = ["#B8963F", "#4A6C6F", "#8C4A4A", "#5B6B8C", "#7A8C4A", "#8C5B7A", "#4A8C7A", "#8C7A4A"];
+
+function uid() { return Math.random().toString(36).slice(2, 10); }
+function todayISO() { return new Date().toISOString().slice(0, 10); }
+function daysBetween(a, b) { return Math.round((new Date(b) - new Date(a)) / 86400000); }
+function fmtNum(n, d = 2) { if (n === null || n === undefined || isNaN(n)) return "—"; return Number(n).toFixed(d); }
+function addDays(dateStr, days) { const d = new Date(dateStr); d.setDate(d.getDate() + Number(days || 0)); return d.toISOString().slice(0, 10); }
+
+const WEIGHT_TICKS = Array.from({ length: (200 - 50) / 5 + 1 }, (_, i) => 50 + i * 5);
+const RECORD_TYPES = ["Vaccination", "Dewormer", "Treatment", "Other"];
+const SHOW_STATUSES = ["Maybe", "Entered", "Going"];
+
+// =============================================================================
+// SHARED UI PRIMITIVES
+// =============================================================================
+function Field({ label, children, className = "" }) {
+  return (
+    <div className={className}>
+      <div className="text-[10px] uppercase tracking-wider text-neutral-400 mb-1">{label}</div>
+      {children}
+    </div>
+  );
+}
+function TextInput(props) {
+  return (
+    <input {...props}
+      className={`w-full px-2.5 py-1.5 text-sm outline-none bg-white ${props.className || ""}`}
+      style={{ border: `1px solid #DDD8CC`, borderRadius: "2px", color: black, ...(props.style || {}) }}
+    />
+  );
+}
+function TextArea(props) {
+  return (
+    <textarea {...props}
+      className={`w-full px-2.5 py-1.5 text-sm outline-none bg-white ${props.className || ""}`}
+      style={{ border: `1px solid #DDD8CC`, borderRadius: "2px", color: black, minHeight: 80, ...(props.style || {}) }}
+    />
+  );
+}
+function Select({ value, onChange, options, ...rest }) {
+  return (
+    <select value={value} onChange={onChange} {...rest}
+      className="w-full px-2.5 py-1.5 text-sm outline-none bg-white"
+      style={{ border: `1px solid #DDD8CC`, borderRadius: "2px", color: black }}>
+      {options.map((o) => <option key={o} value={o}>{o}</option>)}
+    </select>
+  );
+}
+function GoldButton({ children, onClick, variant = "solid", className = "", ...rest }) {
+  const solid = variant === "solid";
+  return (
+    <button onClick={onClick} {...rest}
+      className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors ${className}`}
+      style={{ background: solid ? black : "#FFFFFF", color: solid ? goldLight : "#555", border: `1px solid ${solid ? black : "#DDD8CC"}`, borderRadius: "2px" }}>
+      {children}
+    </button>
+  );
+}
+function Card({ children, style = {} }) {
+  return <div className="p-5" style={{ background: "#FFFFFF", border: `1px solid ${goldLight}`, borderRadius: "2px", ...style }}>{children}</div>;
+}
+function SectionLabel({ icon: Icon, children }) {
+  return (
+    <div className="text-[11px] uppercase tracking-[0.15em] mb-4 flex items-center gap-1.5" style={{ color: gold, fontWeight: 600 }}>
+      {Icon && <Icon size={13} />} {children}
+    </div>
+  );
+}
+
+// =============================================================================
+// EMPTY RECORD FACTORIES
+// =============================================================================
+const EMPTY_SHEEP = () => ({
+  id: uid(), name: "", sex: "Wether", lEar: "", rEar: "", birthdate: "", breed: "",
+  sire: "", dam: "", breeder: "", price: "", showman: "", county: "", notes: "",
+  inBarn: true, targetWeight: "", targetDate: "",
+});
+const EMPTY_EXHIBITOR = () => ({
+  name: "", club4h: "", age: "", county: "", numSheep: "", targetShow: "", targetShowDate: "", osf: false,
+});
+const EMPTY_HEALTH_RECORD = () => ({
+  id: uid(), date: todayISO(), type: "Treatment", product: "", doseGiven: "", doseUnit: "mL", withdrawalDays: "", notes: "",
+});
+const EMPTY_SHOW = () => ({
+  id: uid(), name: "", city: "", state: "", date: "", entryDeadline: "", status: "Maybe", judge: "", notes: "",
+});
+const EMPTY_HERD_SHEEP = () => ({
+  id: uid(), name: "", sex: "Ewe", lEar: "", rEar: "", birthdate: "", breed: "",
+  sire: "", dam: "", breeder: "", born: "", reared: "", notes: "", active: true,
+});
+const EMPTY_BREEDING = () => ({
+  id: uid(), ewe: "", eweTag: "", breedingDate: "", via: "A.I.", buck: "", expectedLambing: "",
+  ultrasound: "", actualLambing: "", carriedToTerm: "", bornAlive: "", males: "", females: "", notes: "",
+});
+const EMPTY_LAMB = () => ({
+  id: uid(), tag: "", sex: "Male", sire: "", dam: "", dob: "", soldTo: "", price: "", showedBy: "", notes: "",
+});
+const EMPTY_FEED_LINE = (type) => ({ id: uid(), type, product: "", lbs: "", oz: "", amt: "" });
+const EMPTY_CUSTOM_FEED = () => ({ id: uid(), name: "", category: "Feed", cp: "", fat: "", fib: "", use: "" });
+const EMPTY_SHOW_RESULT = () => ({ id: uid(), showName: "", exhibitor: "", sheepId: "", showedAs: "", placing: "" });
+const FEED_LINE_TYPES = ["Feed", "Supplement", "Drench", "Hay"];
+
+// =============================================================================
+// LEARN STARTER CONTENT (general, well-established husbandry facts)
+// =============================================================================
+const LEARN_STARTERS = [
+  { id: "l1", category: "Breeding", title: "Estrous Cycle Basics", body: "Ewes are seasonally polyestrous, typically cycling in fall as daylight shortens. A normal cycle runs about 17 days (range 14–19), with standing heat lasting roughly 24–36 hours. Rams can be introduced ~2 weeks before the desired breeding window; a 'ram effect' (sudden exposure to a ram after separation) can help synchronize cycling." },
+  { id: "l2", category: "Breeding", title: "Gestation Length", body: "Average gestation is about 147 days (range 144–152), roughly 5 months. Mark expected lambing dates from the breeding/AI date so you can plan lambing supplies and jug space in advance." },
+  { id: "l3", category: "Lambing", title: "Signs Labor Is Approaching", body: "In the final 24–48 hours, ewes often separate from the flock, show restlessness, paw at bedding, and may go off feed. Udder filling and vulva relaxation typically increase in the last week. Have a lambing kit ready: clean towels, iodine for navel dip, a heat lamp or warming box, and OB lubricant." },
+  { id: "l4", category: "Lambing", title: "Normal Presentation", body: "Normal delivery presents front feet first with the head resting on top of the legs, arriving 'diving' position. If you see anything else (backwards, head back, one leg back) after a reasonable pushing period, that's a sign to intervene or call a vet promptly." },
+  { id: "l5", category: "Care", title: "Colostrum Timing", body: "Lambs should nurse colostrum within the first 1–2 hours of life, and absorb the bulk of maternal antibodies within the first 18–24 hours as gut closure occurs. If a lamb won't nurse, hand-milking colostrum from the dam or using a stored/commercial colostrum replacer is standard practice." },
+  { id: "l6", category: "Standards", title: "Show Ring Handling Basics", body: "Judges commonly evaluate structure (soundness, bone, top-line), muscle expression (loin, leg, forearm), balance/style, and finish (fat cover appropriate to breed and market class). Different breed associations (e.g., Southdown vs. crossbred market classes) may weight these differently — check your specific show's premium book for exact criteria." },
+];
+
+// =============================================================================
+// FEED CATALOGUE DATA (10 companies)
+// =============================================================================
+const FEEDS = [
+  { c: "Purina", n: "Honor Show Showlamb Creep Pellet DX", cat: "Pelleted", cp: 20, fat: 5, fib: 10.5, ing: "Ingredient panel not publicly published", use: "Creep feed, 10–14 days through weaning.", tag: "Deccox", src: "purinamills.com" },
+  { c: "Purina", n: "Honor Show Showlamb Creep 20 DX30", cat: "Mini Pellet", cp: 20, fat: 5, fib: 10.5, ing: "Ingredient panel not publicly published", use: "1/8\" mini-pellet creep for skeletal growth and stretch.", tag: "Deccox", src: "purinamills.com" },
+  { c: "Purina", n: "Honor Show Showlamb GR 15 DX TXT", cat: "Textured", cp: 15, fat: 4, fib: 8.5, ing: "Processed grains, cottonseed hulls, molasses", use: "Grow/finish, moderate protein, high fat for accelerated growth.", tag: null, src: "purinamills.com" },
+  { c: "Purina", n: "Honor Show Showlamb Grower 18% DX", cat: "Textured", cp: 18, fat: 3.5, fib: 9, ing: "Processed grains, cottonseed hulls, molasses", use: "High-energy grower for sheep and breeding stock.", tag: null, src: "superiorag.com" },
+  { c: "Purina", n: "Honor Showlamb Stretch 17 TXT DX", cat: "Textured", cp: 17, fat: 2.5, fib: 15, ing: "Processed grains, cottonseed hulls, premix pellet, molasses", use: "Easy-fleshing market lambs & breeding ewes; stretches feeding period.", tag: null, src: "purinamills.com" },
+  { c: "Purina", n: "Honor Show Grand Lamb Mixer DX", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Soybean meal, linseed meal", use: "Concentrate pellet blended with local grains to build custom rations.", tag: "Deccox", src: "purinamills.com" },
+  { c: "Purina", n: "High Octane Champion Drive Topdress", cat: "Supplement", cp: 32, fat: 5, fib: 6, ing: "High-quality animal protein sources, TASCO seaweed extract", use: "Supplemental protein, muscle synthesis, trims fat; contains TASCO for heat stress.", tag: null, src: "shop.purinamills.com" },
+  { c: "Purina", n: "High Octane Fitter 35 Topdress", cat: "Supplement", cp: 35, fat: null, fib: null, ing: "Select animal protein, no meat/bone meal", use: "Lean/muscle definition maintenance during high-caloric feeding.", tag: null, src: "asefeedandsupply.com" },
+  { c: "Purina", n: "High Octane Power Fuel Extreme Topdress", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Extruded fat nugget — panel not published", use: "High-energy topdress for fat cover and finish.", tag: null, src: "shop.purinamills.com" },
+  { c: "Purina", n: "High Octane Heavy Weight Topdress", cat: "Supplement", cp: 8, fat: 70, fib: 0.1, ing: "Dried whey, dried milk protein, animal fat, vegetable oil, lecithin", use: "Extreme energy source; skin/hair quality and bloom.", tag: null, src: "farmstore.com" },
+  { c: "Purina", n: "High Octane Alleviate Gastric Support", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Digestive/gastric support supplement.", tag: null, src: "purinamills.com" },
+  { c: "Umbarger", n: "Lamb 19% (Top Choice)", cat: "Textured", cp: 19, fat: 2.7, fib: 7, ing: "Steam rolled corn, dehulled soybean meal, steam rolled oats, cane molasses/veg oil blend, wheat millrun", use: "Flagship grower/finisher, fed start to finish.", tag: "Bovatec 30g/ton", src: "tomshayfarm.com" },
+  { c: "Umbarger", n: "Lamb Creep 19%", cat: "Textured", cp: 19, fat: 3, fib: 8, ing: "Cracked corn, steam flaked barley, steam flaked oats, linseed pellets, soybean meal", use: "Low-fat cracked-corn creep, pre/post-weaning.", tag: "Deccox 27.2g/ton", src: "themillstores.com" },
+  { c: "Umbarger", n: "Lamb Creep 18%", cat: "Textured", cp: 18, fat: 4, fib: 4.5, ing: "Ingredient panel not publicly published", use: "High-fat cracked-corn creep for quick bloom.", tag: "Deccox 27.2g/ton", src: "issuu.com" },
+  { c: "Umbarger", n: "Lamb 17% with Barley", cat: "Textured", cp: 17, fat: 3, fib: 10, ing: "Steam flaked corn, barley, oats", use: "Late-season finisher; smooth, firm finish.", tag: "Bovatec 30g/ton", src: "newwaverlyfff.com" },
+  { c: "Umbarger", n: "Lamb 16% Hi-Energy", cat: "Textured", cp: 16, fat: 5, fib: 5, ing: "Ingredient panel not publicly published", use: "High-fat, short-term finisher for added condition.", tag: "Bovatec 30g/ton", src: "umbargershowfeeds.com" },
+  { c: "Umbarger", n: "Ewe Breeder 12%", cat: "Pelleted", cp: 12, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Breeding ewe development and maintenance.", tag: null, src: "issuu.com" },
+  { c: "Umbarger", n: "Bulletproof", cat: "Supplement", cp: 16, fat: 7, fib: 4.5, ing: "Black-eyed peas, rice bran oil, soybean oil, brewers dried yeast, plant/animal protein products", use: "All-in-one topdress for bloom, muscle definition, firm/smooth handle. Feed 4–8 oz/feeding.", tag: null, src: "umbargershowfeeds.com" },
+  { c: "Umbarger", n: "Loaded", cat: "Supplement", cp: 12, fat: 5, fib: null, ing: "Ingredient panel not publicly published", use: "Omega-3 texturized fat supplement, bypass protein/fat. 0.25–0.5 lb/day.", tag: null, src: "umbargershowfeeds.com" },
+  { c: "Umbarger", n: "Star Glo", cat: "Supplement", cp: 40, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "High-protein fat-burner topdress for a firmer handle. Up to 1 lb/day.", tag: null, src: "umbargershowfeeds.com" },
+  { c: "Umbarger", n: "Change Up", cat: "Supplement", cp: null, fat: null, fib: 8, ing: "Ingredient panel not publicly published", use: "Forage fill product for the most capacious look on show day.", tag: null, src: "umbargershowfeeds.com" },
+  { c: "Umbarger", n: "Apex", cat: "Supplement", cp: 9, fat: 2, fib: 25, ing: "Beet pulp, citrus pulp", use: "Pelleted fiber fill for a fuller, expanded look. ~0.5 lb/day sheep.", tag: null, src: "rrfarmandfeed.com" },
+  { c: "Show-Rite", n: "NewCo Lamb Feed D22.7", cat: "Textured", cp: 17, fat: 5, fib: 12, ing: "Ingredient panel not publicly published", use: "Maximizes muscle development, ideal handle, smooth finish.", tag: "Deccox 45.4g/ton", src: "showrite.com" },
+  { c: "Show-Rite", n: "NewCo Lamb Creep D22.7", cat: "Mini Pellet", cp: 18, fat: 4.5, fib: 6.25, ing: "Ingredient panel not publicly published", use: "Highly palatable creep, early muscle shape/expression.", tag: "Deccox 45.4g/ton", src: "showrite.com" },
+  { c: "Show-Rite", n: "Fundamental Sheep 14% D22.7", cat: "Pelleted", cp: 14, fat: 5, fib: 11, ing: "Ingredient panel not publicly published", use: "Economical feed; flushing brood ewes, growing ram/ewe lambs.", tag: "Deccox 45.4g/ton", src: "showrite.com" },
+  { c: "Show-Rite", n: "Lamb Nutribase 800 A Plus", cat: "Pelleted", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Base mix blended with commodity grains, birth to show.", tag: null, src: "showrite.com" },
+  { c: "Show-Rite", n: "Colossal", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Early conditioning topdress.", tag: null, src: "showrite.com" },
+  { c: "Show-Rite", n: "Yolked", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Muscle/conditioning topdress.", tag: null, src: "showrite.com" },
+  { c: "Show-Rite", n: "Rite Flex", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Mobility and flexibility support, multi-species.", tag: null, src: "store.alltech.com" },
+  { c: "Show-Rite", n: "Star Shine", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Red pellet — jump in fiber, less fat. 4–8 oz/day.", tag: null, src: "showrite.com" },
+  { c: "Show-Rite", n: "Stretch", cat: "Supplement", cp: null, fat: "near-zero", fib: null, ing: "Ingredient panel not publicly published", use: "Fiber pellet that expands ~3x in gut; lowers rear rib/flank.", tag: null, src: "showrite.com" },
+  { c: "Show-Rite", n: "Exhale", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Stress/recovery support.", tag: null, src: "showrite.com" },
+  { c: "Show-Rite", n: "Seco-Sorb", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Digestive/gut support.", tag: null, src: "showrite.com" },
+  { c: "Show-Rite", n: "Sculpt", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Ultimate fat burner pellet. 4–8 oz/day.", tag: null, src: "showrite.com" },
+  { c: "Show-Rite", n: "Swell", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Keeps lambs fresh and full without tying up. Drench 3 oz/gal water.", tag: null, src: "showrite.com" },
+  { c: "Show-Rite", n: "Fat-N-Fluffy", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Fat cover / fluff conditioning.", tag: null, src: "showrite.com" },
+  { c: "Show-Rite", n: "Rite Tyme", cat: "Supplement", cp: "high", fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "High-protein topdress; lean muscle shape, hide tightening. 1 oz/day.", tag: null, src: "amazon.com" },
+  { c: "Show-Rite", n: "Rite Factor (Multi-Species)", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Alfalfa-based, drug-free (full panel not published)", use: "Muscle build or fat utilization catalyst. 3 oz/day.", tag: null, src: "showrite.com" },
+  { c: "Show-Rite", n: "Stamina", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Energy/endurance support.", tag: null, src: "showrite.com" },
+  { c: "Show-Rite", n: "Muscle-In-Motion", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Early-stage conditioning.", tag: null, src: "showrite.com" },
+  { c: "Essential", n: "Essential 417", cat: "Textured", cp: 18, fat: 5, fib: 14.5, ing: "Ingredient panel not publicly published", use: "Show lamb feed or creep; dense nutrition for muscle/skeletal development.", tag: "Deccox", src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "Money Maker (Creep)", cat: "Textured", cp: 17.5, fat: 5, fib: 9.5, ing: "Ingredient panel not publicly published", use: "Economical texturized creep.", tag: "Deccox", src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "Essential 330", cat: "Pelleted", cp: 17.5, fat: 5, fib: null, ing: "Ingredient panel not publicly published", use: "High-energy pelleted creep for a bloomy start.", tag: "Rumensin", src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "14.5% Ewe Feed", cat: "Pelleted", cp: 14.5, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Base ewe feed, 1–2 lb/head/day.", tag: "Deccox", src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "Repro Plus", cat: "Pelleted", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "For donors, recips, AI/ET/IVF groups and stud ram fertility.", tag: null, src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "Sheep & Goat DFM", cat: "Mineral", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Free-choice mineral; maintains appetite during heat/showing stress.", tag: null, src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "Concept Mineral", cat: "Mineral", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Sheep mineral.", tag: null, src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "Torch", cat: "Supplement", cp: 61, fat: 1, fib: 3, ing: "Ingredient panel not publicly published", use: "Fat-burn/trim, 20–30 day window.", tag: null, src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "Chub", cat: "Supplement", cp: null, fat: 8, fib: 8, ing: "Ingredient panel not publicly published", use: "Pelleted bulk; fill \"from the inside out.\"", tag: null, src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "Foundation", cat: "Supplement", cp: 27, fat: 1.5, fib: 13.5, ing: "Soybean Meal, Linseed Meal, Whole Canola, Whole Flax Seed, Canola Meal, Field Peas", use: "Daily gut-health probiotic (20 trillion CFU/lb Bacillus).", tag: null, src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "Crease", cat: "Supplement", cp: 44, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Muscle expression, handling, skin. (Lysine 17%)", tag: null, src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "Flare", cat: "Supplement", cp: "high", fat: null, fib: "high", ing: "Ingredient panel not publicly published", use: "Expand/open center body, enhance back shape. 2–8 oz/feeding.", tag: null, src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "Voltage", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Appetite/stress support paste (regular and clear versions).", tag: null, src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "Touch Tone", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Muscle expression.", tag: null, src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "Uni4m", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Fat/energy, uniform look.", tag: null, src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "Keep'n On / Keep'n On Clear", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Show-day muscle expression drench.", tag: null, src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "Fluff", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Flax seed oil, MOS (mannanoligosaccharides)", use: "Appetite stimulant; enhances hide/hair quality.", tag: null, src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "Sasquatch (formerly Nu-Grow)", cat: "Supplement", cp: null, fat: null, fib: null, ing: "100mg melatonin/oz", use: "Hair-growth stimulant.", tag: null, src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "Glisten", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Coat shine spray.", tag: null, src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "Equex", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Glucosamine HCl, Chondroitin Sulfate, MSM, Vit C, Shark Cartilage, Hyaluronic Acid, Bromelain", use: "Joint and soft tissue support, liquid.", tag: null, src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "Composure", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Pre-show calming paste/liquid.", tag: null, src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "Belly Down", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Fill / depth.", tag: null, src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "Soft Silk", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Vegetable oils, vitamin E", use: "Coat/cover, omega-3 energy, cherry flavored.", tag: null, src: "essentialshowfeeds.com" },
+  { c: "Essential", n: "12 O'Clock", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Egg/cheese-based (panel not published)", use: "Mass/freshness without waste down low.", tag: null, src: "essentialshowfeeds.com" },
+  { c: "High Noon", n: "Show Lamb #104", cat: "Textured", cp: 18, fat: 4.5, fib: 15, ing: "Dehulled soybean meal, cottonseed hulls, rolled corn, cane molasses, whole oats", use: "Transition/grow-finish, 90–145 lbs. (Regional variants exist.)", tag: "Lasalocid 30g/ton", src: "krusefeed.com" },
+  { c: "High Noon", n: "Show Lamb Extreme (HN112)", cat: "Textured", cp: 18, fat: 4, fib: 13, ing: "Ingredient panel not publicly published", use: "Extra condition/mass; transition 90–115 to 145 lbs.", tag: "Lasalocid 30g/ton", src: "highnoonfeeds.com" },
+  { c: "High Noon", n: "Pro Show Lamb (HN105)", cat: "Textured", cp: 19, fat: 2.5, fib: 13, ing: "Ingredient panel not publicly published", use: "Finisher following Show Lamb, 120 lbs+; leaner, firmer finish.", tag: "Lasalocid 30g/ton", src: "highnoonfeeds.com" },
+  { c: "High Noon", n: "Max Start 90 (HN101)", cat: "Textured", cp: 18, fat: 4, fib: 17, ing: "Ingredient panel not publicly published", use: "Early creep (3–6 wks+); high fiber for rumen health.", tag: "Lasalocid 90g/ton", src: "highnoonfeeds.com" },
+  { c: "High Noon", n: "Max Start Plus (HN102)", cat: "Textured", cp: 18, fat: 5.5, fib: 14, ing: "Ingredient panel not publicly published", use: "Higher-energy creep for quicker bloom.", tag: "Deccox 22.7g/ton", src: "highnoonfeeds.com" },
+  { c: "High Noon", n: "Sure Shot (THN123)", cat: "Textured", cp: "17–18", fat: 5, fib: 10, ing: "Ingredient panel not publicly published", use: "Baby lambs to 90 lbs, introduce at 7–14 days.", tag: null, src: "nrsworld.com" },
+  { c: "High Noon", n: "Monkey Munch (#113)", cat: "Textured", cp: 20, fat: 7.5, fib: 7, ing: "Cracked corn, heat processed soybeans, dehulled soybean meal, suncured alfalfa meal, cane molasses", use: "Banana-flavored early-start creep; also usable as a topdress.", tag: null, src: "PetSmart bag tag" },
+  { c: "High Noon", n: "Punch", cat: "Textured", cp: 18, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Base feed ~45 days out for fresher, fuller tops.", tag: null, src: "producerstx.com" },
+  { c: "High Noon", n: "Charmasson (THN115)", cat: "Textured", cp: 16, fat: null, fib: null, ing: "Ingredient panel not publicly published", use: "Complete high-energy feed for sheep over 60 lbs.", tag: null, src: "Producers Co-op" },
+  { c: "High Noon", n: "Charmasson Gold", cat: "Textured", cp: null, fat: null, fib: null, ing: "Not published — no spec sheet located", use: "Show feed (details unconfirmed).", tag: null, src: "not located" },
+  { c: "High Noon", n: "Ewe Plus Pellets", cat: "Pelleted", cp: null, fat: null, fib: null, ing: "Not published", use: "Ewe / breeding-flock pellet.", tag: null, src: "retailer listings" },
+  { c: "High Noon", n: "36% Ewe & Lamb Supplement (HN110)", cat: "Supplement", cp: 36, fat: 2, fib: 11.5, ing: "Contains ammonium chloride (full panel not published)", use: "Ration balancer; blend into 14/16/18% complete rations.", tag: null, src: "highnoonfeeds.com" },
+  { c: "High Noon", n: "HN 506 Sheep Mineral", cat: "Mineral", cp: null, fat: null, fib: null, ing: "Not published", use: "Free-choice sheep-safe mineral, selenium-fortified.", tag: null, src: "highnoonfeeds.com" },
+  { c: "High Noon", n: "Extra Fill (HN124)", cat: "Supplement", cp: 6, fat: 1.5, fib: 30, ing: "Roughage products, grain products, plant protein products, molasses products", use: "Fill topdress, ¼–1 lb/head/day.", tag: null, src: "highnoonfeeds.com" },
+  { c: "High Noon", n: "Original Glo", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Contains porcine blood (full panel not published)", use: "Firm, clean condition; muscle definition; holding ration.", tag: null, src: "ddfeed.com" },
+  { c: "High Noon", n: "High Glo", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Fuller, more supple muscle. Up to 1 lb/day sheep.", tag: null, src: "highnoonfeeds.com" },
+  { c: "High Noon", n: "Clean Expression", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Muscle definition.", tag: null, src: "highnoonfeeds.com" },
+  { c: "High Noon", n: "Shine 'Em Up", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Coat / shine.", tag: null, src: "highnoonfeeds.com" },
+  { c: "High Noon", n: "Fresh Look Advanced", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Freshness / bloom.", tag: null, src: "highnoonfeeds.com" },
+  { c: "High Noon", n: "Knock Out", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Conditioning.", tag: null, src: "highnoonfeeds.com" },
+  { c: "Sullivan Supply", n: "ShowBloom", cat: "Supplement", cp: 30, fat: null, fib: null, ing: "Brewers liquid yeast, plant protein products, processed grain by-products, cane molasses", use: "Protein/yeast/vitamin blend. 3 oz/day sheep.", tag: null, src: "sullivansupply.com" },
+  { c: "Sullivan Supply", n: "Swell", cat: "Supplement", cp: 12, fat: 0.3, fib: 5, ing: "Not published", use: "Show-day fill/bulk/expansion.", tag: null, src: "agzaga.com" },
+  { c: "Sullivan Supply", n: "Bloom-n-Secret", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Amino acids + proprietary ingredients", use: "One tube 8–12 hrs pre-show; hydration/expansion.", tag: null, src: "valleyvet.com" },
+  { c: "Sullivan Supply", n: "Restore Pro", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "½ oz/day 14 days pre-show, then 4 oz/gal water at show.", tag: null, src: "valleyvet.com" },
+  { c: "Sullivan Supply", n: "Appetite Express", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Appetite stimulant.", tag: null, src: "hfandc.com" },
+  { c: "Sullivan Supply", n: "Show Road Super Charge B12 Paste", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "B12/energy paste.", tag: null, src: "circlepfeedstore.com" },
+  { c: "Sullivan Supply", n: "Peace Pellets", cat: "Supplement", cp: 5.5, fat: 4, fib: 4, ing: "Magnesium oxide, taurine, corn distillers dried grains w/ solubles, inositol, rice bran", use: "Daily calming pellet, mixed in ration.", tag: null, src: "qcsupply.com" },
+  { c: "Sullivan Supply", n: "Show Shake", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Concentrated energy/protein/electrolytes/vitamins for show-day stress.", tag: null, src: "wholllycowfarmandranch.com" },
+  { c: "Sullivan Supply", n: "Flare (resold)", cat: "Supplement", cp: "high", fat: null, fib: "high", ing: "See Essential Feeds Flare", use: "Included in Sullivan's sheep starter kit.", tag: null, src: "sullivansupply.com" },
+  { c: "Sunglo", n: "Show Lamb", cat: "Textured", cp: 17, fat: 3.5, fib: 13, ing: "Contains cottonseed hulls (full panel not published)", use: "Start-to-finish; Healthy Tract Technology; no added copper.", tag: null, src: "sunglofeeds.com" },
+  { c: "Sunglo", n: "Game On", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Proprietary protein/fat blend", use: "Freshness, bloom, bulk. 2–6 oz/day sheep/goat.", tag: null, src: "sunglofeeds.com" },
+  { c: "Sunglo", n: "S'more Fill", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Rolled oat-based", use: "Body fill/appetite. 0.5–1.0 lb/day.", tag: null, src: "sunglofeeds.com" },
+  { c: "Sunglo", n: "Full Tank", cat: "Supplement", cp: null, fat: "low", fib: null, ing: "Not published", use: "Low-fat filler; rib shape/capacity.", tag: null, src: "sunglofeeds.com" },
+  { c: "Sunglo", n: "Sumo", cat: "Supplement", cp: null, fat: "high", fib: null, ing: "Milk-based", use: "Fat cover/bloom. ⅛–¼% body weight/day.", tag: null, src: "sunglofeeds.com" },
+  { c: "Sunglo", n: "4-Sure", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Electrolyte/nutrient replenisher, hydration support.", tag: null, src: "sunglofeeds.com" },
+  { c: "Sunglo", n: "Final Control", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Maintain mass/shape during holding periods.", tag: null, src: "sunglofeeds.com" },
+  { c: "Sunglo", n: "In Motion", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Joint, hoof, skin health. 2–4 oz/day.", tag: null, src: "sunglofeeds.com" },
+  { c: "Sunglo", n: "Liquafat", cat: "Supplement", cp: null, fat: "100 (liquid)", fib: null, ing: "Not published", use: "Liquid fat supplement for any ration.", tag: null, src: "sunglofeeds.com" },
+  { c: "Sunglo", n: "Epic", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Contains Diamond V Ice Plus", use: "Non-melatonin; longer, denser hair and wool.", tag: null, src: "sunglofeeds.com" },
+  { c: "Sunglo", n: "2 The Fullest", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Forage-based", use: "Fullness/freshness. 0.25–1.5 lb/day.", tag: null, src: "sunglofeeds.com" },
+  { c: "Kent", n: "Show Lamb Breeze 45DQ", cat: "Textured", cp: 20, fat: null, fib: null, ing: "Grain products, plant protein products, molasses products, processed grain by-products, calcium carbonate", use: "Sweet textured creep for starting/growing lambs.", tag: "Deccox 45g/ton", src: "kentfeeds.com" },
+  { c: "Kent", n: "Show Lamb Gale Force 18DQ", cat: "Textured", cp: 18, fat: 3.5, fib: 10, ing: "Grain products, plant protein products, molasses products, processed grain by-products, calcium carbonate, cottonseed hulls", use: "Grow/finish textured feed for growth & muscle expression.", tag: "Deccox 18g/ton", src: "kentfeeds.com" },
+  { c: "Kent", n: "Show Lamb Gale Force HE 18DQ", cat: "Textured", cp: 17, fat: 5, fib: 7.5, ing: "Grain products, plant protein products, molasses products", use: "High-energy grow/finish show lamb feed.", tag: "Deccox", src: "kentfeeds.com" },
+  { c: "Kent", n: "ShowBoss Final Drive", cat: "Supplement", cp: 35, fat: null, fib: null, ing: "Processed Grain By-Products, Plant Protein Products, Animal Protein Products, Calcium Carbonate, Brewers Liquid Yeast", use: "Muscle building without sacrificing cover. Sheep ½–1 lb/day.", tag: null, src: "kentfeeds.com" },
+  { c: "Kent", n: "ShowBoss Fit N Finish", cat: "Supplement", cp: 52, fat: null, fib: null, ing: "Not published", use: "Ultra-high protein; rapid changes to appearance, muscle mass.", tag: null, src: "tractorsupply.com" },
+  { c: "Kent", n: "ShowBoss FATfetti", cat: "Supplement", cp: null, fat: 60, fib: null, ing: "Hydrolyzed Animal/Vegetable Fat, Sugar Foods By-Product, Animal Fat Partially Hydrogenated, Calcium Carbonate", use: "Energy dense body condition supplement. 2–3 oz/day.", tag: null, src: "kentfeeds.com" },
+  { c: "Kent", n: "ShowBoss Biomend", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Vitamin/mineral blend additive.", tag: null, src: "amazon.com" },
+  { c: "Kent", n: "ShowBoss Lowdown", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Conditioning.", tag: null, src: "sheepshowring.com" },
+  { c: "Kent", n: "ShowBoss Contour", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Shape/definition.", tag: null, src: "sheepshowring.com" },
+  { c: "Kent", n: "ShowBoss Winning Fill", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Fill.", tag: null, src: "sheepshowring.com" },
+  { c: "Kent", n: "NutriVantage for Sheep", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Proprietary, undisclosed", use: "Increases dry matter intake, supports ADG, reduces stress — included ingredient in Kent show feeds.", tag: null, src: "kentfeeds.com" },
+  { c: "Rule", n: "Thicc", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Carbohydrate/bypass-fat blend", use: "Increase bloom/condition without sacrificing muscle.", tag: null, src: "rulesupplements.com" },
+  { c: "Rule", n: "Shredded R", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Fat-burn/trim, hold muscle and body.", tag: null, src: "rulesupplements.com" },
+  { c: "Rule", n: "The Formula", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Establish appetite/digestive health, nutrient absorption.", tag: null, src: "rulesupplements.com" },
+  { c: "Rule", n: "Fresh N Full", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Fill/freshness.", tag: null, src: "rulesupplements.com" },
+  { c: "Rule", n: "Swoop", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Fill/conditioning.", tag: null, src: "rulesupplements.com" },
+  { c: "Rule", n: "Gorge", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Fill/appetite management.", tag: null, src: "rulesupplements.com" },
+  { c: "Rule", n: "Wintex Punch", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Energy/condition.", tag: null, src: "rulesupplements.com" },
+  { c: "Rule", n: "TotalCare Sheep", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Overall health; hair, skin, touch, joint/tendon support.", tag: null, src: "sullivansupply.com" },
+  { c: "Rule", n: "Bark", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Conditioning.", tag: null, src: "rulesupplements.com" },
+  { c: "Rule", n: "Struttin", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Muscle/movement.", tag: null, src: "rulesupplements.com" },
+  { c: "Rule", n: "Macho Man", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Muscle conditioning.", tag: null, src: "rulesupplements.com" },
+  { c: "Rule", n: "Baby Boom", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Young lamb development.", tag: null, src: "rulesupplements.com" },
+  { c: "Rule", n: "Flex Appeal", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Joint/mobility support.", tag: null, src: "rulesupplements.com" },
+  { c: "Rule", n: "Sasquatch", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Melatonin-based", use: "Hair growth.", tag: null, src: "rulesupplements.com" },
+  { c: "Rule", n: "OPTIWIZE", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Optimization / general conditioning.", tag: null, src: "rulesupplements.com" },
+  { c: "Rule", n: "Race Day", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Show-day prep.", tag: null, src: "rulesupplements.com" },
+  { c: "Rule", n: "Gold Dust Packet", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Show-day additive packet.", tag: null, src: "rulesupplements.com" },
+  { c: "Rule", n: "Sure Shine", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Coat shine.", tag: null, src: "rulesupplements.com" },
+  { c: "Rule", n: "Keep'n On", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Muscle expression.", tag: null, src: "rulesupplements.com" },
+  { c: "Rule", n: "3 Hours Out", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Pre-show timing product.", tag: null, src: "rulesupplements.com" },
+  { c: "Rule", n: "Composed", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Calming.", tag: null, src: "rulesupplements.com" },
+  { c: "Rule", n: "Attitude Adjustment", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Calming/behavior support.", tag: null, src: "rulesupplements.com" },
+  { c: "Rule", n: "Lock Down", cat: "Supplement", cp: null, fat: null, fib: null, ing: "Not published", use: "Hold condition/shape.", tag: null, src: "rulesupplements.com" },
+  { c: "Natural Fill", n: "Natural Fill", cat: "Supplement", cp: 11, fat: 2, fib: 30, ing: "Forages, cob fiberfill, soyhulls, steam-flaked barley, oats, molasses", use: "Fill product replacing beet pulp. 1–3 lb free choice.", tag: null, src: "greenmeadowsforage.com" },
+];
+const FEED_COMPANIES = [...new Set(FEEDS.map((f) => f.c))].sort();
+const FEED_CATEGORIES = [...new Set(FEEDS.map((f) => f.cat))].sort();
+
+// =============================================================================
+// APP
+// =============================================================================
+export default function SheepWrldApp() {
+  const [section, setSection] = useState("showbarn"); // showbarn | herd
+  const [tab, setTab] = useState("roster");
+  const [year, setYear] = useState(new Date().getFullYear().toString());
+  const [years, setYears] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [herdLoading, setHerdLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState(null);
+  const [showAddYear, setShowAddYear] = useState(false);
+  const [newYearNum, setNewYearNum] = useState((new Date().getFullYear() + 1).toString());
+  const [newYearDesc, setNewYearDesc] = useState("");
+
+  // Show Barn state
+  const [exhibitor, setExhibitor] = useState(EMPTY_EXHIBITOR());
+  const [sheep, setSheep] = useState([]);
+  const [weights, setWeights] = useState({});
+  const [healthRecords, setHealthRecords] = useState({});
+  const [shows, setShows] = useState([]);
+  const [feedLog, setFeedLog] = useState({});
+  const [customFeeds, setCustomFeeds] = useState([]);
+  const [showResults, setShowResults] = useState([]);
+
+  // Herd state (continuous — not year-scoped)
+  const [herdSheep, setHerdSheep] = useState([]);
+  const [breeding, setBreeding] = useState([]);
+  const [lambing, setLambing] = useState([]);
+
+  // Learn state (global, not year-scoped)
+  const [learnNotes, setLearnNotes] = useState([]);
+  const [learnLoaded, setLearnLoaded] = useState(false);
+
+  const SHOWBARN_TABS = [
+    { id: "roster", label: "Roster" },
+    { id: "weights", label: "Weights" },
+    { id: "feeds", label: "Feeds" },
+    { id: "health", label: "Health Records" },
+    { id: "calendar", label: "Show Calendar" },
+    { id: "results", label: "Show Results" },
+  ];
+  const HERD_TABS = [
+    { id: "roster", label: "Roster" },
+    { id: "breeding", label: "Breeding Records" },
+    { id: "lambing", label: "Lambing Records" },
+    { id: "learn", label: "Learn" },
+  ];
+
+  // ---- Load / persist -------------------------------------------------------
+  const loadYear = useCallback(async (y) => {
+    setLoading(true);
+    setError(null);
+    try {
+      let ex = EMPTY_EXHIBITOR(), sh = [], wt = {}, hr = {}, sw = [], fl = {}, cf = [], sr = [];
+      try {
+        const r = await window.storage.get(`sheepwrld:showbarn:${y}`);
+        if (r && r.value) {
+          const p = JSON.parse(r.value);
+          ex = p.exhibitor || ex; sh = p.sheep || []; wt = p.weights || {}; hr = p.records || {}; sw = p.shows || [];
+          fl = p.feedLog || {}; cf = p.customFeeds || []; sr = p.showResults || [];
+        }
+      } catch (e) { /* fresh year */ }
+      setExhibitor(ex); setSheep(sh); setWeights(wt); setHealthRecords(hr); setShows(sw);
+      setFeedLog(fl); setCustomFeeds(cf); setShowResults(sr);
+    } catch (e) {
+      setError("Couldn't load records for this year.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const loadHerd = useCallback(async () => {
+    setHerdLoading(true);
+    try {
+      let hsh = [], brd = [], lmb = [];
+      try {
+        const r2 = await window.storage.get("sheepwrld:herd");
+        if (r2 && r2.value) {
+          const p2 = JSON.parse(r2.value);
+          hsh = p2.herdSheep || []; brd = p2.breeding || []; lmb = p2.lambing || [];
+        }
+      } catch (e) { /* fresh */ }
+      setHerdSheep(hsh); setBreeding(brd); setLambing(lmb);
+    } finally {
+      setHerdLoading(false);
+    }
+  }, []);
+
+  const persistShowBarn = useCallback(async (ex, sh, wt, hr, sw, fl, cf, sr) => {
+    if (typeof window === "undefined" || !window.storage) { setError("Storage isn't available right now — changes are kept for this session only."); return; }
+    setSaving(true);
+    try {
+      await window.storage.set(`sheepwrld:showbarn:${year}`, JSON.stringify({ exhibitor: ex, sheep: sh, weights: wt, records: hr, shows: sw, feedLog: fl, customFeeds: cf, showResults: sr }));
+      setError(null);
+    } catch (e) { setError("Couldn't save — your changes are still here, but try again if this keeps happening."); }
+    finally { setSaving(false); }
+  }, [year]);
+
+  const persistHerd = useCallback(async (hsh, brd, lmb) => {
+    if (typeof window === "undefined" || !window.storage) { setError("Storage isn't available right now — changes are kept for this session only."); return; }
+    setSaving(true);
+    try {
+      await window.storage.set("sheepwrld:herd", JSON.stringify({ herdSheep: hsh, breeding: brd, lambing: lmb }));
+      setError(null);
+    } catch (e) { setError("Couldn't save — your changes are still here, but try again if this keeps happening."); }
+    finally { setSaving(false); }
+  }, []);
+
+  const persistLearn = useCallback(async (notes) => {
+    if (typeof window === "undefined" || !window.storage) return;
+    try { await window.storage.set("sheepwrld:learn", JSON.stringify(notes)); } catch (e) { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await window.storage.get("sheepwrld:years");
+        setYears(r && r.value ? JSON.parse(r.value) : [new Date().getFullYear().toString()]);
+      } catch { setYears([new Date().getFullYear().toString()]); }
+      try {
+        const rl = await window.storage.get("sheepwrld:learn");
+        setLearnNotes(rl && rl.value ? JSON.parse(rl.value) : LEARN_STARTERS);
+      } catch { setLearnNotes(LEARN_STARTERS); }
+      setLearnLoaded(true);
+      loadYear(year);
+      loadHerd();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => { loadYear(year); }, [year, loadYear]);
+
+  const saveShowBarn = (ex = exhibitor, sh = sheep, wt = weights, hr = healthRecords, sw = shows, fl = feedLog, cf = customFeeds, sr = showResults) =>
+    persistShowBarn(ex, sh, wt, hr, sw, fl, cf, sr);
+  const saveHerd = (hsh = herdSheep, brd = breeding, lmb = lambing) => persistHerd(hsh, brd, lmb);
+
+  const submitAddYear = async () => {
+    if (!/^\d{4}$/.test(newYearNum.trim())) { setError("Enter a valid 4-digit year."); return; }
+    const label = newYearDesc.trim() ? `${newYearNum.trim()} ${newYearDesc.trim()}` : newYearNum.trim();
+    if (years.includes(label)) { setYear(label); setShowAddYear(false); return; }
+    const next = [...years, label];
+    setYears(next);
+    try { await window.storage.set("sheepwrld:years", JSON.stringify(next)); } catch {}
+    setYear(label);
+    setShowAddYear(false);
+    setNewYearDesc("");
+  };
+
+  // switch section -> reset to first tab of that section
+  const switchSection = (s) => { setSection(s); setTab("roster"); };
+
+  const tabs = section === "showbarn" ? SHOWBARN_TABS : HERD_TABS;
+
+  // ---- Excel export (Show Barn only) ----------------------------------------
+  const exportExcel = () => {
+    const wb = XLSX.utils.book_new();
+    const rosterRows = [
+      { Field: "Exhibitor", Value: exhibitor.name }, { Field: "4-H Club", Value: exhibitor.club4h },
+      { Field: "Age", Value: exhibitor.age }, { Field: "County", Value: exhibitor.county },
+      { Field: "# of Sheep", Value: exhibitor.numSheep }, { Field: "Target Show", Value: exhibitor.targetShow },
+      { Field: "Target Show Date", Value: exhibitor.targetShowDate }, { Field: "OSF?", Value: exhibitor.osf ? "Yes" : "No" },
+      {}, ...sheep.map((s) => ({
+        Name: s.name, Sex: s.sex, "L Ear": s.lEar, "R Ear": s.rEar, Birthdate: s.birthdate, Breed: s.breed,
+        Sire: s.sire, Dam: s.dam, Breeder: s.breeder, Price: s.price, Showman: s.showman, County: s.county,
+        Notes: s.notes, "In Barn": s.inBarn ? "Yes" : "No",
+      })),
+    ];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rosterRows), "Roster");
+
+    const weightRows = [];
+    sheep.forEach((s) => (weights[s.id] || []).forEach((w) => weightRows.push({ Sheep: s.name, Date: w.date, "Weight (lbs)": w.weight })));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(weightRows), "Weights");
+
+    const feedRows = [];
+    sheep.forEach((s) => (feedLog[s.id] || []).forEach((entry) => entry.lines.forEach((l) => feedRows.push({
+      Sheep: s.name, Date: entry.date, Type: l.type, Product: l.product,
+      Amount: l.type === "Feed" ? `${l.lbs || 0} lbs ${l.oz || 0} oz` : l.type === "Supplement" ? `${l.amt || 0} oz` : l.type === "Drench" ? `${l.amt || 0} cc` : `${l.amt || 0} handfuls`,
+    }))));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(feedRows), "Feed Log");
+
+    const healthRows = [];
+    sheep.forEach((s) => (healthRecords[s.id] || []).forEach((r) => healthRows.push({
+      Sheep: s.name, Date: r.date, Type: r.type, Product: r.product, Dose: `${r.doseGiven || ""} ${r.doseUnit || ""}`,
+      "Withdrawal (days)": r.withdrawalDays, "Clears On": r.withdrawalDays ? addDays(r.date, r.withdrawalDays) : "", Notes: r.notes,
+    })));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(healthRows), "Health Records");
+
+    const showRows = shows.map((s) => ({
+      Show: s.name, City: s.city, State: s.state, Date: s.date, Judge: s.judge,
+      Attending: (s.attendees || []).map((id) => sheep.find((sh) => sh.id === id)?.name).filter(Boolean).join(", "),
+      Notes: s.notes,
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(showRows), "Show Calendar");
+
+    const resultRows = showResults.map((r) => ({
+      Show: r.showName, Exhibitor: r.exhibitor, Sheep: sheep.find((s) => s.id === r.sheepId)?.name || "", "Showed As": r.showedAs, Placing: r.placing,
+    }));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(resultRows), "Show Results");
+
+    XLSX.writeFile(wb, `SHEEP WRLD - ${year}.xlsx`);
+  };
+
+  // ---- PDF export (Show Barn only, via browser print) ------------------------
+  const printRef = useRef(null);
+  const exportPDF = () => {
+    setTimeout(() => window.print(), 50);
+  };
+
+  return (
+    <div className="min-h-screen w-full" style={{ background: cream, fontFamily: "'Inter', sans-serif" }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&family=Cormorant+Garamond:ital@1&family=Inter:wght@400;500;600&display=swap');
+        @media print {
+          body * { visibility: hidden; }
+          #sheepwrld-print-area, #sheepwrld-print-area * { visibility: visible; }
+          #sheepwrld-print-area { position: absolute; top: 0; left: 0; width: 100%; }
+        }
+      `}</style>
+
+      {/* Header */}
+      <div style={{ background: black }} className="w-full">
+        <div className="max-w-6xl mx-auto px-6 py-8">
+          <div className="flex items-center justify-between flex-wrap gap-4">
+            <div>
+              <div className="text-xs tracking-[0.35em] uppercase mb-1" style={{ color: goldLight, fontFamily: "'Cormorant Garamond', serif", fontStyle: "italic" }}>
+                {section === "showbarn" ? "Show Barn Records" : "Herd Records"}
+              </div>
+              <h1 className="text-4xl tracking-wide" style={{ fontFamily: "'Playfair Display', serif", color: "#FFFFFF", fontWeight: 600 }}>
+                SHEEP WRLD
+              </h1>
+            </div>
+            <div className="flex flex-col items-end gap-2">
+              <div className="flex items-center gap-3">
+                {saving && <Loader2 size={14} className="animate-spin" style={{ color: goldLight }} />}
+                {section === "showbarn" && (
+                  <div className="flex items-center gap-1 flex-wrap justify-end">
+                    {years.map((y) => (
+                      <button key={y} onClick={() => setYear(y)} className="px-3 py-1.5 text-sm"
+                        style={{ background: y === year ? gold : "transparent", color: y === year ? black : goldLight, border: `1px solid ${gold}`, borderRadius: "2px", fontWeight: y === year ? 700 : 400 }}>
+                        {y}
+                      </button>
+                    ))}
+                    <button onClick={() => setShowAddYear((v) => !v)} className="px-2 py-1.5" style={{ color: goldLight, border: `1px solid ${goldLight}`, borderRadius: "2px" }}>
+                      <Plus size={14} />
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {section === "showbarn" && showAddYear && (
+                <div className="flex items-end gap-2 p-2" style={{ background: "#242424", border: `1px solid ${goldLight}`, borderRadius: "2px" }}>
+                  <div>
+                    <div className="text-[9px] uppercase tracking-wider mb-1" style={{ color: goldLight }}>Year</div>
+                    <input value={newYearNum} onChange={(e) => setNewYearNum(e.target.value)} placeholder="2026"
+                      className="px-2 py-1 text-sm outline-none" style={{ width: 70, border: `1px solid ${goldLight}`, borderRadius: "2px", background: "#FFFFFF" }} />
+                  </div>
+                  <div>
+                    <div className="text-[9px] uppercase tracking-wider mb-1" style={{ color: goldLight }}>Description (optional)</div>
+                    <input value={newYearDesc} onChange={(e) => setNewYearDesc(e.target.value)} placeholder="Summer, Fall..."
+                      className="px-2 py-1 text-sm outline-none" style={{ width: 130, border: `1px solid ${goldLight}`, borderRadius: "2px", background: "#FFFFFF" }} />
+                  </div>
+                  <button onClick={submitAddYear} className="px-3 py-1.5 text-xs font-medium" style={{ background: gold, color: black, borderRadius: "2px" }}>
+                    <Check size={13} />
+                  </button>
+                </div>
+              )}
+
+              {section === "showbarn" && (
+                <div className="flex items-center gap-2">
+                  <button onClick={exportPDF} className="px-3 py-1.5 text-xs flex items-center gap-1.5" style={{ color: goldLight, border: `1px solid ${goldLight}`, borderRadius: "2px" }}>
+                    <FileDown size={13} /> Generate PDF
+                  </button>
+                  <button onClick={exportExcel} className="px-3 py-1.5 text-xs flex items-center gap-1.5" style={{ color: goldLight, border: `1px solid ${goldLight}`, borderRadius: "2px" }}>
+                    <FileSpreadsheet size={13} /> Generate Excel
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Section switch */}
+          <div className="flex gap-2 mt-6">
+            {[{ id: "showbarn", label: "Show Barn" }, { id: "herd", label: "Herd View" }].map((s) => (
+              <button key={s.id} onClick={() => switchSection(s.id)}
+                className="px-4 py-2 text-sm"
+                style={{
+                  background: section === s.id ? gold : "transparent",
+                  color: section === s.id ? black : goldLight,
+                  border: `1px solid ${gold}`, borderRadius: "2px",
+                  fontWeight: section === s.id ? 700 : 400,
+                }}>
+                {s.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div style={{ height: "2px", background: `linear-gradient(90deg, transparent, ${gold}, transparent)` }} />
+      </div>
+
+      {/* Sub-tabs */}
+      <div className="max-w-6xl mx-auto px-6 pt-6">
+        <div className="flex gap-2 mb-6 flex-wrap">
+          {tabs.map((t) => (
+            <button key={t.id} onClick={() => setTab(t.id)} className="px-4 py-2 text-sm"
+              style={{
+                background: tab === t.id ? black : "#FFFFFF",
+                color: tab === t.id ? goldLight : "#555",
+                border: `1px solid ${tab === t.id ? black : "#DDD8CC"}`,
+                borderRadius: "2px",
+                fontWeight: tab === t.id ? 600 : 400,
+              }}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {error && (
+          <div className="flex items-center gap-2 mb-4 px-3 py-2 text-sm" style={{ background: "#FBEAEA", border: "1px solid #E0B4B4", borderRadius: "2px", color: "#8C4A4A" }}>
+            <AlertCircle size={14} /> {error}
+          </div>
+        )}
+
+        {(section === "showbarn" ? loading : herdLoading) ? (
+          <div className="flex items-center gap-2 py-16 justify-center text-neutral-400 text-sm">
+            <Loader2 size={16} className="animate-spin" /> Loading records…
+          </div>
+        ) : section === "showbarn" ? (
+          <ShowBarnSection
+            tab={tab}
+            exhibitor={exhibitor} setExhibitor={setExhibitor}
+            sheep={sheep} setSheep={setSheep}
+            weights={weights} setWeights={setWeights}
+            healthRecords={healthRecords} setHealthRecords={setHealthRecords}
+            shows={shows} setShows={setShows}
+            feedLog={feedLog} setFeedLog={setFeedLog}
+            customFeeds={customFeeds} setCustomFeeds={setCustomFeeds}
+            showResults={showResults} setShowResults={setShowResults}
+            saveShowBarn={saveShowBarn}
+          />
+        ) : (
+          <HerdSection
+            tab={tab}
+            herdSheep={herdSheep} setHerdSheep={setHerdSheep}
+            breeding={breeding} setBreeding={setBreeding}
+            lambing={lambing} setLambing={setLambing}
+            saveHerd={saveHerd}
+            learnNotes={learnNotes} setLearnNotes={setLearnNotes}
+            persistLearn={persistLearn}
+            learnLoaded={learnLoaded}
+          />
+        )}
+      </div>
+
+      <div className="max-w-6xl mx-auto px-6 py-10 text-center">
+        <p className="text-[11px] text-neutral-400">
+          {section === "showbarn" ? `Show Barn records for ${year} are saved automatically to this browser. Add a year above to start a new season's folder.` : "Herd records are continuous and saved automatically to this browser."} Learn notes are shared across all years.
+        </p>
+      </div>
+
+      {/* Hidden printable report (Show Barn only) */}
+      {section === "showbarn" && (
+        <div id="sheepwrld-print-area" style={{ display: "none" }}>
+          <PrintableReport year={year} exhibitor={exhibitor} sheep={sheep} weights={weights} healthRecords={healthRecords} shows={shows} feedLog={feedLog} showResults={showResults} />
+        </div>
+      )}
+      <style>{`@media print { #sheepwrld-print-area { display: block !important; } }`}</style>
+    </div>
+  );
+}
+
+// ---- Printable Report (for PDF via browser print) ----
+function PrintableReport({ year, exhibitor, sheep, weights, healthRecords, shows, feedLog, showResults }) {
+  return (
+    <div style={{ fontFamily: "Georgia, serif", color: "#1B1B1B", padding: 24 }}>
+      <h1 style={{ borderBottom: "2px solid #B8963F", paddingBottom: 8 }}>SHEEP WRLD — {year}</h1>
+      <h2>Exhibitor</h2>
+      <p>{exhibitor.name} · {exhibitor.club4h} · Age {exhibitor.age} · {exhibitor.county} County</p>
+
+      <h2>Sheep Roster</h2>
+      <table border="1" cellPadding="4" style={{ borderCollapse: "collapse", width: "100%", fontSize: 12 }}>
+        <thead><tr>{["Name", "Sex", "Breed", "Sire", "Dam", "Showman", "Notes"].map((h) => <th key={h}>{h}</th>)}</tr></thead>
+        <tbody>{sheep.map((s) => <tr key={s.id}><td>{s.name}</td><td>{s.sex}</td><td>{s.breed}</td><td>{s.sire}</td><td>{s.dam}</td><td>{s.showman}</td><td>{s.notes}</td></tr>)}</tbody>
+      </table>
+
+      <h2>Weights</h2>
+      {sheep.map((s) => (
+        <div key={s.id} style={{ marginBottom: 8 }}>
+          <strong>{s.name}</strong>: {(weights[s.id] || []).map((w) => `${w.date}: ${w.weight}lb`).join(", ") || "No weigh-ins"}
+        </div>
+      ))}
+
+      <h2>Current Feed Program</h2>
+      {sheep.map((s) => {
+        const log = feedLog[s.id] || [];
+        const latest = log[log.length - 1];
+        return <div key={s.id} style={{ marginBottom: 4 }}><strong>{s.name}</strong>: {latest ? latest.lines.map((l) => `${l.type}: ${l.product}`).join("; ") : "Not set"}</div>;
+      })}
+
+      <h2>Health Records</h2>
+      {sheep.map((s) => (
+        <div key={s.id} style={{ marginBottom: 8 }}>
+          <strong>{s.name}</strong>: {(healthRecords[s.id] || []).map((r) => `${r.date} ${r.product} (${r.type})`).join("; ") || "None logged"}
+        </div>
+      ))}
+
+      <h2>Show Calendar</h2>
+      <table border="1" cellPadding="4" style={{ borderCollapse: "collapse", width: "100%", fontSize: 12 }}>
+        <thead><tr>{["Show", "Location", "Date", "Judge", "Attending"].map((h) => <th key={h}>{h}</th>)}</tr></thead>
+        <tbody>{shows.map((s) => <tr key={s.id}><td>{s.name}</td><td>{[s.city, s.state].filter(Boolean).join(", ")}</td><td>{s.date}</td><td>{s.judge}</td><td>{(s.attendees || []).map((id) => sheep.find((sh) => sh.id === id)?.name).filter(Boolean).join(", ")}</td></tr>)}</tbody>
+      </table>
+
+      <h2>Show Results</h2>
+      <table border="1" cellPadding="4" style={{ borderCollapse: "collapse", width: "100%", fontSize: 12 }}>
+        <thead><tr>{["Show", "Exhibitor", "Sheep", "Showed As", "Placing"].map((h) => <th key={h}>{h}</th>)}</tr></thead>
+        <tbody>{showResults.map((r) => <tr key={r.id}><td>{r.showName}</td><td>{r.exhibitor}</td><td>{sheep.find((s) => s.id === r.sheepId)?.name || ""}</td><td>{r.showedAs}</td><td>{r.placing}</td></tr>)}</tbody>
+      </table>
+    </div>
+  );
+}
+
+// =============================================================================
+// SHOW BARN SECTION
+// =============================================================================
+function ShowBarnSection({ tab, exhibitor, setExhibitor, sheep, setSheep, weights, setWeights, healthRecords, setHealthRecords, shows, setShows, feedLog, setFeedLog, customFeeds, setCustomFeeds, showResults, setShowResults, saveShowBarn }) {
+  const [editingSheepId, setEditingSheepId] = useState(null);
+  const [hiddenGraphIds, setHiddenGraphIds] = useState(new Set());
+  const [activeSheepId, setActiveSheepId] = useState(sheep[0]?.id || null);
+  const [newWeightVal, setNewWeightVal] = useState("");
+  const [newWeightDate, setNewWeightDate] = useState(todayISO());
+
+  const [healthActiveSheepId, setHealthActiveSheepId] = useState(sheep[0]?.id || null);
+  const [healthEditingId, setHealthEditingId] = useState(null);
+  const [healthDraft, setHealthDraft] = useState(EMPTY_HEALTH_RECORD());
+  const [showCalc, setShowCalc] = useState(false);
+  const [calcWeight, setCalcWeight] = useState("");
+  const [calcRateAmt, setCalcRateAmt] = useState("");
+  const [calcRatePer, setCalcRatePer] = useState("");
+  const [calcUnit, setCalcUnit] = useState("mL");
+
+  const [editingShowId, setEditingShowId] = useState(null);
+  const [showDraft, setShowDraft] = useState(EMPTY_SHOW());
+
+  const [feedActiveSheepId, setFeedActiveSheepId] = useState(sheep[0]?.id || null);
+  const [feedEditing, setFeedEditing] = useState(false);
+  const [feedDraftLines, setFeedDraftLines] = useState([]);
+  const [feedDraftDate, setFeedDraftDate] = useState(todayISO());
+
+  const [editingResultId, setEditingResultId] = useState(null);
+  const [resultDraft, setResultDraft] = useState(EMPTY_SHOW_RESULT());
+
+  useEffect(() => {
+    if (!activeSheepId && sheep[0]) setActiveSheepId(sheep[0].id);
+    if (!healthActiveSheepId && sheep[0]) setHealthActiveSheepId(sheep[0].id);
+    if (!feedActiveSheepId && sheep[0]) setFeedActiveSheepId(sheep[0].id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sheep]);
+
+  // ---- Roster actions ----
+  const updateExhibitor = (patch) => { const next = { ...exhibitor, ...patch }; setExhibitor(next); saveShowBarn(next, sheep, weights, healthRecords, shows, feedLog, customFeeds, showResults); };
+  const saveExhibitor = () => { saveShowBarn(exhibitor, sheep, weights, healthRecords, shows, feedLog, customFeeds, showResults); };
+  const addSheep = () => { const next = [...sheep, EMPTY_SHEEP()]; setSheep(next); setEditingSheepId(next[next.length - 1].id); saveShowBarn(exhibitor, next, weights, healthRecords, shows, feedLog, customFeeds, showResults); };
+  const updateSheep = (id, patch) => { const next = sheep.map((s) => (s.id === id ? { ...s, ...patch } : s)); setSheep(next); saveShowBarn(exhibitor, next, weights, healthRecords, shows, feedLog, customFeeds, showResults); };
+  const removeSheep = (id) => {
+    if (!confirm("Remove this sheep from the roster? This will also delete its weight, health, and feed logs.")) return;
+    const next = sheep.filter((s) => s.id !== id);
+    const nextWeights = { ...weights }; delete nextWeights[id];
+    const nextHealth = { ...healthRecords }; delete nextHealth[id];
+    const nextFeed = { ...feedLog }; delete nextFeed[id];
+    setSheep(next); setWeights(nextWeights); setHealthRecords(nextHealth); setFeedLog(nextFeed);
+    setHiddenGraphIds((prev) => { const s2 = new Set(prev); s2.delete(id); return s2; });
+    if (activeSheepId === id) setActiveSheepId(next[0]?.id || null);
+    if (healthActiveSheepId === id) setHealthActiveSheepId(next[0]?.id || null);
+    if (feedActiveSheepId === id) setFeedActiveSheepId(next[0]?.id || null);
+    saveShowBarn(exhibitor, next, nextWeights, nextHealth, shows, nextFeed, customFeeds, showResults);
+  };
+
+  // ---- Weight actions ----
+  const addWeightEntry = () => {
+    if (!activeSheepId || !newWeightVal || isNaN(parseFloat(newWeightVal))) return;
+    const entry = { id: uid(), date: newWeightDate, weight: parseFloat(newWeightVal) };
+    const list = [...(weights[activeSheepId] || []), entry].sort((a, b) => new Date(a.date) - new Date(b.date));
+    const next = { ...weights, [activeSheepId]: list };
+    setWeights(next); setNewWeightVal(""); setNewWeightDate(todayISO());
+    saveShowBarn(exhibitor, sheep, next, healthRecords, shows, feedLog, customFeeds, showResults);
+  };
+  const removeWeightEntry = (sheepId, entryId) => {
+    const list = (weights[sheepId] || []).filter((e) => e.id !== entryId);
+    const next = { ...weights, [sheepId]: list };
+    setWeights(next); saveShowBarn(exhibitor, sheep, next, healthRecords, shows, feedLog, customFeeds, showResults);
+  };
+
+  const sheepColor = (id) => PALETTE[sheep.findIndex((s) => s.id === id) % PALETTE.length];
+  const chartData = useMemo(() => {
+    const allDates = new Set();
+    sheep.forEach((s) => (weights[s.id] || []).forEach((w) => allDates.add(w.date)));
+    const sortedDates = [...allDates].sort((a, b) => new Date(a) - new Date(b));
+    return sortedDates.map((date) => {
+      const row = { date };
+      sheep.forEach((s) => { const e = (weights[s.id] || []).find((w) => w.date === date); if (e) row[s.name || "Unnamed"] = e.weight; });
+      return row;
+    });
+  }, [sheep, weights]);
+  const adgStats = (sheepId) => {
+    const list = weights[sheepId] || [];
+    if (list.length === 0) return { overall: null, recent: null, last: null, first: null };
+    const first = list[0], last = list[list.length - 1];
+    const overallDays = daysBetween(first.date, last.date);
+    const overall = overallDays > 0 ? (last.weight - first.weight) / overallDays : null;
+    let recent = null;
+    if (list.length >= 2) { const prev = list[list.length - 2]; const d = daysBetween(prev.date, last.date); recent = d > 0 ? (last.weight - prev.weight) / d : null; }
+    return { overall, recent, last, first };
+  };
+  const projection = (s) => {
+    const { last } = adgStats(s.id);
+    if (!last || !s.targetWeight || !s.targetDate) return null;
+    const lbsToGo = parseFloat(s.targetWeight) - last.weight;
+    const daysLeft = daysBetween(todayISO(), s.targetDate);
+    const lbsPerDayNeeded = daysLeft > 0 ? lbsToGo / daysLeft : null;
+    return { lbsToGo, daysLeft, lbsPerDayNeeded };
+  };
+  const activeSheep = sheep.find((s) => s.id === activeSheepId);
+
+  // ---- Health actions ----
+  const startHealthAdd = () => { setHealthDraft(EMPTY_HEALTH_RECORD()); setHealthEditingId("new"); };
+  const startHealthEdit = (rec) => { setHealthDraft({ ...rec }); setHealthEditingId(rec.id); };
+  const cancelHealthEdit = () => { setHealthEditingId(null); setHealthDraft(EMPTY_HEALTH_RECORD()); setShowCalc(false); };
+  const saveHealthDraft = () => {
+    if (!healthActiveSheepId || !healthDraft.product) return;
+    const list = healthRecords[healthActiveSheepId] || [];
+    const exists = list.some((r) => r.id === healthDraft.id);
+    const nextList = exists ? list.map((r) => (r.id === healthDraft.id ? healthDraft : r)) : [...list, healthDraft];
+    const next = { ...healthRecords, [healthActiveSheepId]: nextList };
+    setHealthRecords(next); saveShowBarn(exhibitor, sheep, weights, next, shows, feedLog, customFeeds, showResults); cancelHealthEdit();
+  };
+  const removeHealthRecord = (id) => {
+    if (!confirm("Delete this health record?")) return;
+    const next = { ...healthRecords, [healthActiveSheepId]: (healthRecords[healthActiveSheepId] || []).filter((r) => r.id !== id) };
+    setHealthRecords(next); saveShowBarn(exhibitor, sheep, weights, next, shows, feedLog, customFeeds, showResults);
+  };
+  const calcResult = useMemo(() => {
+    const w = parseFloat(calcWeight), amt = parseFloat(calcRateAmt), per = parseFloat(calcRatePer);
+    if (!w || !amt || !per) return null;
+    return (w / per) * amt;
+  }, [calcWeight, calcRateAmt, calcRatePer]);
+  const applyCalcToDraft = () => { if (calcResult === null) return; setHealthDraft((d) => ({ ...d, doseGiven: calcResult.toFixed(2), doseUnit: calcUnit })); setShowCalc(false); };
+
+  // ---- Show calendar actions ----
+  const startShowAdd = () => { setShowDraft(EMPTY_SHOW()); setEditingShowId("new"); };
+  const startShowEdit = (sw) => { setShowDraft({ ...sw, attendees: sw.attendees || [] }); setEditingShowId(sw.id); };
+  const cancelShowEdit = () => { setEditingShowId(null); setShowDraft(EMPTY_SHOW()); };
+  const saveShowDraft = () => {
+    if (!showDraft.name) return;
+    const exists = shows.some((s) => s.id === showDraft.id);
+    const next = exists ? shows.map((s) => (s.id === showDraft.id ? showDraft : s)) : [...shows, showDraft];
+    setShows(next); saveShowBarn(exhibitor, sheep, weights, healthRecords, next, feedLog, customFeeds, showResults); cancelShowEdit();
+  };
+  const removeShow = (id) => {
+    if (!confirm("Delete this show?")) return;
+    const next = shows.filter((s) => s.id !== id);
+    setShows(next); saveShowBarn(exhibitor, sheep, weights, healthRecords, next, feedLog, customFeeds, showResults);
+  };
+
+  // ---- Feed log actions ----
+  const startFeedUpdate = () => {
+    setFeedDraftDate(todayISO());
+    setFeedDraftLines(FEED_LINE_TYPES.map((t) => EMPTY_FEED_LINE(t)));
+    setFeedEditing(true);
+  };
+  const cancelFeedUpdate = () => { setFeedEditing(false); setFeedDraftLines([]); };
+  const addFeedDraftLine = (type) => setFeedDraftLines((prev) => [...prev, EMPTY_FEED_LINE(type)]);
+  const updateFeedDraftLine = (id, patch) => setFeedDraftLines((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
+  const removeFeedDraftLine = (id) => setFeedDraftLines((prev) => prev.filter((l) => l.id !== id));
+  const saveFeedUpdate = () => {
+    if (!feedActiveSheepId) return;
+    const nonEmpty = feedDraftLines.filter((l) => l.product && l.product.trim());
+    if (nonEmpty.length === 0) return;
+    const entry = { id: uid(), date: feedDraftDate, lines: nonEmpty };
+    const list = [...(feedLog[feedActiveSheepId] || []), entry].sort((a, b) => new Date(a.date) - new Date(b.date));
+    const next = { ...feedLog, [feedActiveSheepId]: list };
+    setFeedLog(next); saveShowBarn(exhibitor, sheep, weights, healthRecords, shows, next, customFeeds, showResults);
+    cancelFeedUpdate();
+  };
+  const removeFeedEntry = (sheepId, entryId) => {
+    const list = (feedLog[sheepId] || []).filter((e) => e.id !== entryId);
+    const next = { ...feedLog, [sheepId]: list };
+    setFeedLog(next); saveShowBarn(exhibitor, sheep, weights, healthRecords, shows, next, customFeeds, showResults);
+  };
+  const addCustomFeed = (cf) => {
+    const next = [...customFeeds, cf];
+    setCustomFeeds(next); saveShowBarn(exhibitor, sheep, weights, healthRecords, shows, feedLog, next, showResults);
+  };
+
+  // ---- Show results actions ----
+  const startResultAdd = () => { setResultDraft(EMPTY_SHOW_RESULT()); setEditingResultId("new"); };
+  const startResultEdit = (r) => { setResultDraft({ ...r }); setEditingResultId(r.id); };
+  const cancelResultEdit = () => { setEditingResultId(null); setResultDraft(EMPTY_SHOW_RESULT()); };
+  const saveResultDraft = () => {
+    if (!resultDraft.showName) return;
+    const exists = showResults.some((r) => r.id === resultDraft.id);
+    const next = exists ? showResults.map((r) => (r.id === resultDraft.id ? resultDraft : r)) : [...showResults, resultDraft];
+    setShowResults(next); saveShowBarn(exhibitor, sheep, weights, healthRecords, shows, feedLog, customFeeds, next); cancelResultEdit();
+  };
+  const removeResult = (id) => {
+    if (!confirm("Delete this result?")) return;
+    const next = showResults.filter((r) => r.id !== id);
+    setShowResults(next); saveShowBarn(exhibitor, sheep, weights, healthRecords, shows, feedLog, customFeeds, next);
+  };
+
+  if (tab === "roster") {
+    return <RosterTab exhibitor={exhibitor} updateExhibitor={updateExhibitor} saveExhibitor={saveExhibitor} sheep={sheep} addSheep={addSheep} updateSheep={updateSheep} removeSheep={removeSheep} editingSheepId={editingSheepId} setEditingSheepId={setEditingSheepId} />;
+  }
+  if (tab === "weights") {
+    return (
+      <WeightsTab sheep={sheep} weights={weights} chartData={chartData} sheepColor={sheepColor}
+        hiddenGraphIds={hiddenGraphIds} setHiddenGraphIds={setHiddenGraphIds}
+        activeSheepId={activeSheepId} setActiveSheepId={setActiveSheepId} activeSheep={activeSheep}
+        adgStats={adgStats} projection={projection}
+        newWeightVal={newWeightVal} setNewWeightVal={setNewWeightVal} newWeightDate={newWeightDate} setNewWeightDate={setNewWeightDate}
+        addWeightEntry={addWeightEntry} removeWeightEntry={removeWeightEntry} updateSheep={updateSheep} />
+    );
+  }
+  if (tab === "feeds") {
+    return (
+      <FeedsTab sheep={sheep} feedLog={feedLog} customFeeds={customFeeds} addCustomFeed={addCustomFeed}
+        activeSheepId={feedActiveSheepId} setActiveSheepId={setFeedActiveSheepId}
+        editing={feedEditing} draftLines={feedDraftLines} draftDate={feedDraftDate} setDraftDate={setFeedDraftDate}
+        startUpdate={startFeedUpdate} cancelUpdate={cancelFeedUpdate} addLine={addFeedDraftLine} updateLine={updateFeedDraftLine} removeLine={removeFeedDraftLine}
+        saveUpdate={saveFeedUpdate} removeEntry={removeFeedEntry} />
+    );
+  }
+  if (tab === "health") {
+    return (
+      <HealthTab sheep={sheep} records={healthRecords} activeSheepId={healthActiveSheepId} setActiveSheepId={setHealthActiveSheepId}
+        editingId={healthEditingId} draft={healthDraft} setDraft={setHealthDraft}
+        startAdd={startHealthAdd} startEdit={startHealthEdit} cancelEdit={cancelHealthEdit} saveDraft={saveHealthDraft} removeRecord={removeHealthRecord}
+        showCalc={showCalc} setShowCalc={setShowCalc} calcWeight={calcWeight} setCalcWeight={setCalcWeight}
+        calcRateAmt={calcRateAmt} setCalcRateAmt={setCalcRateAmt} calcRatePer={calcRatePer} setCalcRatePer={setCalcRatePer}
+        calcUnit={calcUnit} setCalcUnit={setCalcUnit} calcResult={calcResult} applyCalcToDraft={applyCalcToDraft} />
+    );
+  }
+  if (tab === "calendar") {
+    return (
+      <CalendarTab shows={shows} sheep={sheep} editingShowId={editingShowId} showDraft={showDraft} setShowDraft={setShowDraft}
+        startShowAdd={startShowAdd} startShowEdit={startShowEdit} cancelShowEdit={cancelShowEdit} saveShowDraft={saveShowDraft} removeShow={removeShow} />
+    );
+  }
+  return (
+    <ShowResultsTab sheep={sheep} exhibitor={exhibitor} showResults={showResults}
+      editingId={editingResultId} draft={resultDraft} setDraft={setResultDraft}
+      startAdd={startResultAdd} startEdit={startResultEdit} cancelEdit={cancelResultEdit} saveDraft={saveResultDraft} removeRecord={removeResult} />
+  );
+}
+
+// ---- Roster Tab ----
+function RosterTab({ exhibitor, updateExhibitor, saveExhibitor, sheep, addSheep, updateSheep, removeSheep, editingSheepId, setEditingSheepId }) {
+  const [savedFlash, setSavedFlash] = useState(false);
+  const handleSaveExhibitor = () => { saveExhibitor(); setSavedFlash(true); setTimeout(() => setSavedFlash(false), 1500); };
+  const visibleCols = [["name", "Name"], ["sex", "Sex"], ["showman", "Showman"]];
+  const allCols = [
+    ["name", "Name", "text"], ["sex", "Sex", "select"], ["lEar", "L Ear", "text"], ["rEar", "R Ear", "text"],
+    ["birthdate", "Birthdate", "date"], ["breed", "Breed", "text"], ["sire", "Sire", "text"], ["dam", "Dam", "text"],
+    ["breeder", "Breeder", "text"], ["price", "Price", "text"], ["showman", "Showman", "text"], ["county", "County", "text"], ["notes", "Additional Notes", "text"],
+  ];
+  return (
+    <div className="space-y-6 pb-16">
+      <Card>
+        <SectionLabel>Exhibitor</SectionLabel>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Field label="Name"><TextInput value={exhibitor.name} onChange={(e) => updateExhibitor({ name: e.target.value })} /></Field>
+          <Field label="4-H Club"><TextInput value={exhibitor.club4h} onChange={(e) => updateExhibitor({ club4h: e.target.value })} /></Field>
+          <Field label="Age"><TextInput value={exhibitor.age} onChange={(e) => updateExhibitor({ age: e.target.value })} /></Field>
+          <Field label="County"><TextInput value={exhibitor.county} onChange={(e) => updateExhibitor({ county: e.target.value })} /></Field>
+          <Field label="# of Sheep"><TextInput value={exhibitor.numSheep} onChange={(e) => updateExhibitor({ numSheep: e.target.value })} /></Field>
+          <Field label="Target Show"><TextInput value={exhibitor.targetShow} onChange={(e) => updateExhibitor({ targetShow: e.target.value })} /></Field>
+          <Field label="Target Show Date"><TextInput type="date" value={exhibitor.targetShowDate} onChange={(e) => updateExhibitor({ targetShowDate: e.target.value })} /></Field>
+          <Field label="OSF?">
+            <button onClick={() => updateExhibitor({ osf: !exhibitor.osf })} className="w-full px-2.5 py-1.5 text-sm text-left"
+              style={{ border: `1px solid #DDD8CC`, borderRadius: "2px", background: exhibitor.osf ? goldLight : "#FFFFFF" }}>
+              {exhibitor.osf ? "Yes" : "No"}
+            </button>
+          </Field>
+        </div>
+        <div className="flex justify-end mt-4">
+          <GoldButton onClick={handleSaveExhibitor}>
+            {savedFlash ? <><Check size={13} /> Saved</> : <><Save size={13} /> Save Exhibitor</>}
+          </GoldButton>
+        </div>
+      </Card>
+
+      <Card>
+        <div className="flex items-center justify-between mb-4">
+          <SectionLabel>Sheep Roster ({sheep.length})</SectionLabel>
+          <GoldButton onClick={addSheep}><Plus size={13} /> Add Sheep</GoldButton>
+        </div>
+        <div className="text-[11px] text-neutral-400 mb-3">
+          Showing Name, Sex, and Showman. All other fields are still stored — expand a row to view or edit them.
+        </div>
+        {sheep.length === 0 ? (
+          <div className="text-sm text-neutral-400 text-center py-10">No sheep added yet for this year.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${goldLight}` }}>
+                  {visibleCols.map(([key, label]) => <th key={key} className="text-left px-2 py-2 text-[10px] uppercase tracking-wider text-neutral-400 whitespace-nowrap">{label}</th>)}
+                  <th className="text-left px-2 py-2 text-[10px] uppercase tracking-wider text-neutral-400">In Barn</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {sheep.map((s) => {
+                  const editing = editingSheepId === s.id;
+                  return (
+                    <React.Fragment key={s.id}>
+                      <tr style={{ borderBottom: editing ? "none" : "1px solid #EEE9DC", background: editing ? "#FBF6E9" : "transparent" }}>
+                        {visibleCols.map(([key]) => (
+                          <td key={key} className="px-2 py-2 whitespace-nowrap">
+                            <span style={{ color: key === "name" ? black : "#555", fontWeight: key === "name" ? 600 : 400 }}>{s[key] || "—"}</span>
+                          </td>
+                        ))}
+                        <td className="px-2 py-2">
+                          <button onClick={() => updateSheep(s.id, { inBarn: !s.inBarn })} className="text-xs px-2 py-0.5"
+                            style={{ border: `1px solid ${s.inBarn ? gold : "#DDD8CC"}`, borderRadius: "2px", color: s.inBarn ? gold : "#999" }}>
+                            {s.inBarn ? "Active" : "Out"}
+                          </button>
+                        </td>
+                        <td className="px-2 py-2">
+                          <div className="flex gap-1">
+                            <button onClick={() => setEditingSheepId(editing ? null : s.id)} className="text-xs px-2 py-0.5 flex items-center gap-1"
+                              style={{ color: editing ? "#4A6C4A" : gold, border: `1px solid ${editing ? "#4A6C4A" : goldLight}`, borderRadius: "2px" }}>
+                              {editing ? <><Save size={12} /> Done</> : <><Pencil size={12} /> Edit</>}
+                            </button>
+                            <button onClick={() => removeSheep(s.id)} className="text-xs px-1.5 py-0.5 text-red-400 hover:text-red-600"><Trash2 size={13} /></button>
+                          </div>
+                        </td>
+                      </tr>
+                      {editing && (
+                        <tr style={{ borderBottom: "1px solid #EEE9DC", background: "#FBF6E9" }}>
+                          <td colSpan={visibleCols.length + 2} className="px-2 pb-4 pt-1">
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-3" style={{ background: "#FFFFFF", border: `1px solid ${goldLight}`, borderRadius: "2px" }}>
+                              {allCols.map(([key, label, type]) => (
+                                <Field label={label} key={key}>
+                                  {key === "sex" ? (
+                                    <Select value={s.sex} onChange={(e) => updateSheep(s.id, { sex: e.target.value })} options={["Wether", "Ewe", "Ram"]} />
+                                  ) : (
+                                    <TextInput type={type} value={s[key]} onChange={(e) => updateSheep(s.id, { [key]: e.target.value })} />
+                                  )}
+                                </Field>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+// ---- Weights Tab ----
+function WeightsTab({ sheep, weights, chartData, sheepColor, hiddenGraphIds, setHiddenGraphIds, activeSheepId, setActiveSheepId, activeSheep, adgStats, projection, newWeightVal, setNewWeightVal, newWeightDate, setNewWeightDate, addWeightEntry, removeWeightEntry, updateSheep }) {
+  const toggleGraph = (id) => setHiddenGraphIds((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  if (sheep.length === 0) return <div className="text-sm text-neutral-400 text-center py-16">Add sheep to the roster first to begin tracking weights.</div>;
+  const activeStats = activeSheep ? adgStats(activeSheep.id) : null;
+  const activeProj = activeSheep ? projection(activeSheep) : null;
+  return (
+    <div className="space-y-6 pb-16">
+      <Card>
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+          <SectionLabel icon={TrendingUp}>Weight Trajectory</SectionLabel>
+          <div className="flex flex-wrap gap-1.5">
+            {sheep.map((s) => {
+              const visible = !hiddenGraphIds.has(s.id);
+              return (
+                <button key={s.id} onClick={() => toggleGraph(s.id)} className="px-2 py-0.5 text-[11px] flex items-center gap-1"
+                  style={{ border: `1px solid ${visible ? sheepColor(s.id) : "#DDD8CC"}`, borderRadius: "2px", opacity: visible ? 1 : 0.4 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 999, background: sheepColor(s.id), display: "inline-block" }} />
+                  {s.name || "Unnamed"}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <div style={{ width: "100%", height: 320 }}>
+          <ResponsiveContainer>
+            <LineChart data={chartData} margin={{ top: 8, right: 16, left: -8, bottom: 8 }}>
+              <CartesianGrid stroke="#EEE9DC" />
+              <XAxis dataKey="date" tick={{ fontSize: 11, fill: "#999" }} label={{ value: "Date", position: "insideBottom", offset: -4, fontSize: 11, fill: "#999" }} />
+              <YAxis domain={[50, 200]} ticks={WEIGHT_TICKS} tick={{ fontSize: 11, fill: "#999" }} label={{ value: "Weight (lbs)", angle: -90, position: "insideLeft", fontSize: 11, fill: "#999" }} />
+              <Tooltip contentStyle={{ fontSize: 12, borderRadius: 2, borderColor: goldLight }} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+              {sheep.filter((s) => !hiddenGraphIds.has(s.id)).map((s) => (
+                <Line key={s.id} type="monotone" dataKey={s.name || "Unnamed"} stroke={sheepColor(s.id)} strokeWidth={2} dot={{ r: 3 }} connectNulls />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 md:grid-cols-[220px_1fr] gap-4">
+        <div className="p-3" style={{ background: "#FFFFFF", border: `1px solid ${goldLight}`, borderRadius: "2px", maxHeight: 480, overflowY: "auto" }}>
+          {sheep.map((s) => (
+            <button key={s.id} onClick={() => setActiveSheepId(s.id)} className="w-full text-left px-2.5 py-2 text-sm flex items-center gap-2 mb-1"
+              style={{ background: activeSheepId === s.id ? cream : "transparent", borderLeft: `3px solid ${activeSheepId === s.id ? sheepColor(s.id) : "transparent"}`, borderRadius: "2px", color: black, fontWeight: activeSheepId === s.id ? 600 : 400 }}>
+              <span style={{ width: 8, height: 8, borderRadius: 999, background: sheepColor(s.id), flexShrink: 0 }} />
+              {s.name || "Unnamed"}
+            </button>
+          ))}
+        </div>
+
+        {activeSheep && (
+          <Card>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl" style={{ fontFamily: "'Playfair Display', serif", color: black }}>{activeSheep.name || "Unnamed"}</h3>
+              <GoldButton onClick={() => setActiveSheepId(null)}>Done</GoldButton>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3 mb-5">
+              <div className="p-3" style={{ background: cream, borderRadius: "2px" }}>
+                <div className="text-[10px] uppercase tracking-wider text-neutral-400">Current Weight</div>
+                <div className="text-lg font-semibold" style={{ color: black }}>{activeStats?.last ? `${activeStats.last.weight} lbs` : "—"}</div>
+              </div>
+              <div className="p-3" style={{ background: cream, borderRadius: "2px" }}>
+                <div className="text-[10px] uppercase tracking-wider text-neutral-400">Overall ADG</div>
+                <div className="text-lg font-semibold" style={{ color: black }}>{fmtNum(activeStats?.overall)} lb/day</div>
+              </div>
+              <div className="p-3" style={{ background: cream, borderRadius: "2px" }}>
+                <div className="text-[10px] uppercase tracking-wider text-neutral-400">ADG Since Last</div>
+                <div className="text-lg font-semibold" style={{ color: black }}>{fmtNum(activeStats?.recent)} lb/day</div>
+              </div>
+            </div>
+
+            <div className="mb-5">
+              <SectionLabel icon={Target}>Show Day Target</SectionLabel>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                <Field label="Target Weight (lbs)"><TextInput value={activeSheep.targetWeight} onChange={(e) => updateSheep(activeSheep.id, { targetWeight: e.target.value })} /></Field>
+                <Field label="Target Show Date"><TextInput type="date" value={activeSheep.targetDate} onChange={(e) => updateSheep(activeSheep.id, { targetDate: e.target.value })} /></Field>
+                <Field label="Lbs To Go"><div className="px-2.5 py-1.5 text-sm" style={{ color: black, fontWeight: 600 }}>{activeProj ? fmtNum(activeProj.lbsToGo, 1) : "—"}</div></Field>
+                <Field label="Lbs/Day Needed"><div className="px-2.5 py-1.5 text-sm" style={{ color: black, fontWeight: 600 }}>{activeProj ? fmtNum(activeProj.lbsPerDayNeeded) : "—"}</div></Field>
+              </div>
+              {activeProj && activeStats?.recent !== null && activeStats?.recent !== undefined && (
+                <div className="text-xs px-3 py-2 inline-block" style={{ borderRadius: "2px", background: activeStats.recent >= activeProj.lbsPerDayNeeded ? "#EAF3EA" : "#FBEAEA", color: activeStats.recent >= activeProj.lbsPerDayNeeded ? "#4A6C4A" : "#8C4A4A" }}>
+                  {activeStats.recent >= activeProj.lbsPerDayNeeded ? `On track — current pace covers the ${fmtNum(activeProj.lbsPerDayNeeded)} lb/day needed.` : `Behind pace — need ${fmtNum(activeProj.lbsPerDayNeeded)} lb/day, currently gaining ${fmtNum(activeStats.recent)}.`}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <SectionLabel icon={Calendar}>Log a Weigh-In</SectionLabel>
+              <div className="flex items-end gap-2 mb-4">
+                <Field label="Date"><TextInput type="date" value={newWeightDate} onChange={(e) => setNewWeightDate(e.target.value)} /></Field>
+                <Field label="Weight (lbs)"><TextInput type="number" value={newWeightVal} onChange={(e) => setNewWeightVal(e.target.value)} /></Field>
+                <GoldButton onClick={addWeightEntry}><Plus size={13} /> Add</GoldButton>
+              </div>
+              <div className="space-y-1 max-h-56 overflow-y-auto">
+                {(weights[activeSheep.id] || []).slice().reverse().map((w) => (
+                  <div key={w.id} className="flex items-center justify-between px-3 py-1.5 text-sm" style={{ background: cream, borderRadius: "2px" }}>
+                    <span className="text-neutral-500">{w.date}</span>
+                    <span style={{ color: black, fontWeight: 600 }}>{w.weight} lbs</span>
+                    <button onClick={() => removeWeightEntry(activeSheep.id, w.id)} className="text-red-400 hover:text-red-600"><X size={13} /></button>
+                  </div>
+                ))}
+                {(weights[activeSheep.id] || []).length === 0 && <div className="text-xs text-neutral-400 text-center py-4">No weigh-ins logged yet.</div>}
+              </div>
+            </div>
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---- Feeds Tab (Feed Catalogue lookup) ----
+function formatFeedAmount(line) {
+  if (line.type === "Feed") return `${line.lbs || 0} lb ${line.oz || 0} oz`;
+  if (line.type === "Supplement") return `${line.amt || 0} oz`;
+  if (line.type === "Drench") return `${line.amt || 0} cc`;
+  return `${line.amt || 0} handfuls`;
+}
+
+function ProductPicker({ value, onChange, customFeeds, onAddCustom }) {
+  const [addingCustom, setAddingCustom] = useState(false);
+  const [cf, setCf] = useState(EMPTY_CUSTOM_FEED());
+
+  const handleChange = (e) => {
+    const v = e.target.value;
+    if (v === "__addcustom__") { setAddingCustom(true); return; }
+    onChange(v);
+  };
+
+  const submitCustom = () => {
+    if (!cf.name.trim()) return;
+    onAddCustom(cf);
+    onChange(cf.name.trim());
+    setAddingCustom(false);
+    setCf(EMPTY_CUSTOM_FEED());
+  };
+
+  return (
+    <div>
+      <select value={FEEDS.some((f) => `${f.c} – ${f.n}` === value) || customFeeds.some((c) => c.name === value) ? value : (value ? "__other__" : "")}
+        onChange={handleChange} className="w-full px-2.5 py-1.5 text-sm outline-none bg-white"
+        style={{ border: `1px solid #DDD8CC`, borderRadius: "2px", color: black }}>
+        <option value="">Select a feed/supplement...</option>
+        {value && !FEEDS.some((f) => `${f.c} – ${f.n}` === value) && !customFeeds.some((c) => c.name === value) && (
+          <option value="__other__">{value}</option>
+        )}
+        <option value="__addcustom__">+ Add Custom Feed...</option>
+        {customFeeds.length > 0 && (
+          <optgroup label="Custom Feeds">
+            {customFeeds.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+          </optgroup>
+        )}
+        {FEED_COMPANIES.map((co) => (
+          <optgroup key={co} label={co}>
+            {FEEDS.filter((f) => f.c === co).map((f) => <option key={f.n} value={`${f.c} – ${f.n}`}>{f.n}</option>)}
+          </optgroup>
+        ))}
+      </select>
+
+      {addingCustom && (
+        <div className="mt-2 p-3" style={{ background: cream, border: `1px solid ${goldLight}`, borderRadius: "2px" }}>
+          <div className="grid grid-cols-2 gap-2 mb-2">
+            <TextInput placeholder="Feed name" value={cf.name} onChange={(e) => setCf({ ...cf, name: e.target.value })} />
+            <Select value={cf.category} onChange={(e) => setCf({ ...cf, category: e.target.value })} options={["Feed", "Supplement", "Drench", "Hay", "Other"]} />
+          </div>
+          <div className="grid grid-cols-3 gap-2 mb-2">
+            <TextInput placeholder="CP %" value={cf.cp} onChange={(e) => setCf({ ...cf, cp: e.target.value })} />
+            <TextInput placeholder="Fat %" value={cf.fat} onChange={(e) => setCf({ ...cf, fat: e.target.value })} />
+            <TextInput placeholder="Fiber %" value={cf.fib} onChange={(e) => setCf({ ...cf, fib: e.target.value })} />
+          </div>
+          <TextInput placeholder="Intended use (optional)" value={cf.use} onChange={(e) => setCf({ ...cf, use: e.target.value })} className="mb-2" />
+          <div className="flex justify-end gap-2">
+            <GoldButton variant="outline" onClick={() => setAddingCustom(false)}>Cancel</GoldButton>
+            <GoldButton onClick={submitCustom}>Add Feed</GoldButton>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FeedLineRow({ line, onUpdate, onRemove, customFeeds, onAddCustom }) {
+  return (
+    <div className="p-3 mb-2" style={{ background: "#FFFFFF", border: `1px solid #DDD8CC`, borderRadius: "2px" }}>
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: gold }}>{line.type}</span>
+        <button onClick={onRemove} className="text-neutral-400 hover:text-red-500"><X size={13} /></button>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+        <div className="md:col-span-2">
+          <ProductPicker value={line.product} onChange={(v) => onUpdate({ product: v })} customFeeds={customFeeds} onAddCustom={onAddCustom} />
+        </div>
+        {line.type === "Feed" && (
+          <div className="flex gap-2">
+            <TextInput type="number" placeholder="lbs" value={line.lbs} onChange={(e) => onUpdate({ lbs: e.target.value })} />
+            <TextInput type="number" placeholder="oz" value={line.oz} onChange={(e) => onUpdate({ oz: e.target.value })} />
+          </div>
+        )}
+        {line.type === "Supplement" && <TextInput type="number" placeholder="oz" value={line.amt} onChange={(e) => onUpdate({ amt: e.target.value })} />}
+        {line.type === "Drench" && <TextInput type="number" placeholder="cc" value={line.amt} onChange={(e) => onUpdate({ amt: e.target.value })} />}
+        {line.type === "Hay" && <TextInput type="number" placeholder="handfuls" value={line.amt} onChange={(e) => onUpdate({ amt: e.target.value })} />}
+      </div>
+    </div>
+  );
+}
+
+// ---- Feeds Tab (per-sheep feed program tracker) ----
+function FeedsTab({ sheep, feedLog, customFeeds, addCustomFeed, activeSheepId, setActiveSheepId, editing, draftLines, draftDate, setDraftDate, startUpdate, cancelUpdate, addLine, updateLine, removeLine, saveUpdate, removeEntry }) {
+  if (sheep.length === 0) return <div className="text-sm text-neutral-400 text-center py-16">Add sheep to the roster first to begin tracking feed programs.</div>;
+  const activeSheep = sheep.find((s) => s.id === activeSheepId);
+  const activeHistory = (feedLog[activeSheepId] || []).slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  const currentSummary = (sheepId) => {
+    const list = (feedLog[sheepId] || []).slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+    const latest = list[0];
+    if (!latest) return "Not set";
+    const feedLine = latest.lines.find((l) => l.type === "Feed") || latest.lines[0];
+    return `${feedLine.product} — ${formatFeedAmount(feedLine)}`;
+  };
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] gap-4 pb-16">
+      <div className="p-3" style={{ background: "#FFFFFF", border: `1px solid ${goldLight}`, borderRadius: "2px", maxHeight: 600, overflowY: "auto" }}>
+        {sheep.map((s) => (
+          <button key={s.id} onClick={() => setActiveSheepId(s.id)} className="w-full text-left px-2.5 py-2 mb-1"
+            style={{ background: activeSheepId === s.id ? cream : "transparent", borderRadius: "2px" }}>
+            <div className="text-sm" style={{ color: black, fontWeight: activeSheepId === s.id ? 600 : 400 }}>{s.name || "Unnamed"}</div>
+            <div className="text-[11px] text-neutral-500 truncate">{currentSummary(s.id)}</div>
+          </button>
+        ))}
+      </div>
+
+      {activeSheep && (
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-xl" style={{ fontFamily: "'Playfair Display', serif", color: black }}>{activeSheep.name || "Unnamed"}</h3>
+            {!editing && <GoldButton onClick={startUpdate}><Plus size={13} /> Log Feed Update</GoldButton>}
+          </div>
+
+          {editing && (
+            <div className="p-4 mb-4" style={{ background: cream, border: `1px solid ${goldLight}`, borderRadius: "2px" }}>
+              <Field label="Date Changed" className="mb-3" style={{ maxWidth: 200 }}>
+                <TextInput type="date" value={draftDate} onChange={(e) => setDraftDate(e.target.value)} />
+              </Field>
+
+              {draftLines.map((line) => (
+                <FeedLineRow key={line.id} line={line} onUpdate={(patch) => updateLine(line.id, patch)} onRemove={() => removeLine(line.id)} customFeeds={customFeeds} onAddCustom={addCustomFeed} />
+              ))}
+
+              <div className="flex flex-wrap gap-2 mb-4">
+                {FEED_LINE_TYPES.map((t) => (
+                  <button key={t} onClick={() => addLine(t)} className="text-xs px-2 py-1 flex items-center gap-1" style={{ border: `1px solid ${goldLight}`, borderRadius: "2px", color: gold }}>
+                    <Plus size={11} /> Add {t}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex justify-end gap-2">
+                <GoldButton variant="outline" onClick={cancelUpdate}>Cancel</GoldButton>
+                <GoldButton onClick={saveUpdate}><Save size={13} /> Save Update</GoldButton>
+              </div>
+            </div>
+          )}
+
+          <div>
+            <SectionLabel>Feed History</SectionLabel>
+            {activeHistory.length === 0 ? (
+              <div className="text-sm text-neutral-400 text-center py-8">No feed updates logged yet.</div>
+            ) : (
+              <div className="space-y-2">
+                {activeHistory.map((entry) => (
+                  <div key={entry.id} className="p-3" style={{ background: cream, borderRadius: "2px" }}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-semibold" style={{ color: black }}>{entry.date}</span>
+                      <button onClick={() => removeEntry(activeSheepId, entry.id)} className="text-red-400 hover:text-red-600"><Trash2 size={13} /></button>
+                    </div>
+                    <div className="space-y-0.5">
+                      {entry.lines.map((l) => (
+                        <div key={l.id} className="text-sm text-neutral-700">
+                          <span className="text-[10px] uppercase tracking-wider mr-1.5" style={{ color: gold }}>{l.type}</span>
+                          {l.product} — {formatFeedAmount(l)}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// ---- Health Records Tab ----
+function HealthTab({ sheep, records, activeSheepId, setActiveSheepId, editingId, draft, setDraft, startAdd, startEdit, cancelEdit, saveDraft, removeRecord, showCalc, setShowCalc, calcWeight, setCalcWeight, calcRateAmt, setCalcRateAmt, calcRatePer, setCalcRatePer, calcUnit, setCalcUnit, calcResult, applyCalcToDraft }) {
+  if (sheep.length === 0) return <div className="text-sm text-neutral-400 text-center py-16">Add sheep to the roster first to begin logging health records.</div>;
+  const activeSheep = sheep.find((s) => s.id === activeSheepId);
+  const activeRecords = (records[activeSheepId] || []).slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-[220px_1fr] gap-4 pb-16">
+      <div className="p-3" style={{ background: "#FFFFFF", border: `1px solid ${goldLight}`, borderRadius: "2px", maxHeight: 560, overflowY: "auto" }}>
+        {sheep.map((s) => {
+          const inWithdrawal = (records[s.id] || []).some((r) => r.withdrawalDays && addDays(r.date, r.withdrawalDays) >= todayISO());
+          return (
+            <button key={s.id} onClick={() => { setActiveSheepId(s.id); cancelEdit(); }} className="w-full text-left px-2.5 py-2 text-sm flex items-center justify-between mb-1"
+              style={{ background: activeSheepId === s.id ? cream : "transparent", borderRadius: "2px", color: black, fontWeight: activeSheepId === s.id ? 600 : 400 }}>
+              <span>{s.name || "Unnamed"}</span>
+              {inWithdrawal && <ShieldAlert size={13} color="#B85C3F" />}
+            </button>
+          );
+        })}
+      </div>
+
+      {activeSheep && (
+        <Card>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-xl" style={{ fontFamily: "'Playfair Display', serif", color: black }}>{activeSheep.name || "Unnamed"}</h3>
+            <GoldButton onClick={startAdd}><Plus size={13} /> Log Entry</GoldButton>
+          </div>
+
+          {editingId && (
+            <div className="p-4 mb-4" style={{ background: cream, border: `1px solid ${goldLight}`, borderRadius: "2px" }}>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                <Field label="Date"><TextInput type="date" value={draft.date} onChange={(e) => setDraft({ ...draft, date: e.target.value })} /></Field>
+                <Field label="Type"><Select value={draft.type} onChange={(e) => setDraft({ ...draft, type: e.target.value })} options={RECORD_TYPES} /></Field>
+                <Field label="Product / Medication" className="col-span-2"><TextInput value={draft.product} onChange={(e) => setDraft({ ...draft, product: e.target.value })} placeholder="e.g. LA-200, Safeguard, CD&T" /></Field>
+                <Field label="Dose Given"><TextInput value={draft.doseGiven} onChange={(e) => setDraft({ ...draft, doseGiven: e.target.value })} /></Field>
+                <Field label="Unit"><TextInput value={draft.doseUnit} onChange={(e) => setDraft({ ...draft, doseUnit: e.target.value })} placeholder="mL, cc, mg" /></Field>
+                <Field label="Withdrawal (days)"><TextInput type="number" value={draft.withdrawalDays} onChange={(e) => setDraft({ ...draft, withdrawalDays: e.target.value })} /></Field>
+                <Field label="Withdrawal Clears"><div className="px-2.5 py-1.5 text-sm" style={{ color: black, fontWeight: 600 }}>{draft.withdrawalDays ? addDays(draft.date, draft.withdrawalDays) : "—"}</div></Field>
+              </div>
+              <Field label="Notes" className="mb-3"><TextInput value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} /></Field>
+              <div className="flex items-center justify-between">
+                <button onClick={() => setShowCalc((v) => !v)} className="text-xs flex items-center gap-1" style={{ color: gold }}><Calculator size={13} /> {showCalc ? "Hide" : "Open"} dose calculator</button>
+                <div className="flex gap-2"><GoldButton variant="outline" onClick={cancelEdit}>Cancel</GoldButton><GoldButton onClick={saveDraft}><Save size={13} /> Save</GoldButton></div>
+              </div>
+              {showCalc && (
+                <div className="mt-3 p-3" style={{ background: "#FFFFFF", border: `1px solid ${goldLight}`, borderRadius: "2px" }}>
+                  <div className="text-[11px] uppercase tracking-wider mb-2" style={{ color: gold, fontWeight: 600 }}>Weight-Based Dose Calculator</div>
+                  <p className="text-[11px] text-neutral-500 mb-3">Enter the animal's weight and the dose rate exactly as printed on the product label — the calculator does the math, it doesn't supply the rate.</p>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                    <Field label="Animal Weight (lbs)"><TextInput type="number" value={calcWeight} onChange={(e) => setCalcWeight(e.target.value)} /></Field>
+                    <Field label="Label Dose Amount"><TextInput type="number" value={calcRateAmt} onChange={(e) => setCalcRateAmt(e.target.value)} placeholder="e.g. 1" /></Field>
+                    <Field label="Per lbs Body Weight"><TextInput type="number" value={calcRatePer} onChange={(e) => setCalcRatePer(e.target.value)} placeholder="e.g. 100" /></Field>
+                    <Field label="Unit"><TextInput value={calcUnit} onChange={(e) => setCalcUnit(e.target.value)} placeholder="mL, cc, mg" /></Field>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm">Computed dose: <span style={{ fontWeight: 700, color: black }}>{calcResult !== null ? `${calcResult.toFixed(2)} ${calcUnit}` : "—"}</span></div>
+                    <GoldButton onClick={applyCalcToDraft}>Use This Dose</GoldButton>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="space-y-2">
+            {activeRecords.length === 0 && !editingId && <div className="text-sm text-neutral-400 text-center py-8">No health records logged yet.</div>}
+            {activeRecords.map((r) => {
+              const clears = r.withdrawalDays ? addDays(r.date, r.withdrawalDays) : null;
+              const inWithdrawal = clears && clears >= todayISO();
+              const pastShow = clears && activeSheep.targetDate && clears > activeSheep.targetDate;
+              return (
+                <div key={r.id} className="p-3 flex items-start justify-between" style={{ background: cream, borderRadius: "2px" }}>
+                  <div className="flex items-start gap-3">
+                    <Syringe size={16} style={{ color: gold, marginTop: 2 }} />
+                    <div>
+                      <div className="text-sm" style={{ color: black, fontWeight: 600 }}>{r.product} <span className="text-neutral-400 font-normal">· {r.type}</span></div>
+                      <div className="text-xs text-neutral-500">{r.date} {r.doseGiven && `· ${r.doseGiven} ${r.doseUnit}`} {r.notes && `· ${r.notes}`}</div>
+                      {clears && (
+                        <div className="text-xs mt-1 flex items-center gap-1" style={{ color: inWithdrawal ? "#B85C3F" : "#4A6C4A" }}>
+                          {inWithdrawal ? <ShieldAlert size={12} /> : <CheckCircle2 size={12} />}
+                          {inWithdrawal ? `Withdrawal until ${clears}` : `Cleared ${clears}`}
+                          {pastShow && <span style={{ color: "#B85C3F", fontWeight: 600 }}>— extends past target show date!</span>}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex gap-1">
+                    <button onClick={() => startEdit(r)} className="text-xs px-1.5 py-0.5" style={{ color: gold }}><Pencil size={13} /></button>
+                    <button onClick={() => removeRecord(r.id)} className="text-xs px-1.5 py-0.5 text-red-400 hover:text-red-600"><Trash2 size={13} /></button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// ---- Show Calendar Tab ----
+function CalendarTab({ shows, editingShowId, showDraft, setShowDraft, startShowAdd, startShowEdit, cancelShowEdit, saveShowDraft, removeShow }) {
+  const sorted = shows.slice().sort((a, b) => new Date(a.date || "9999-12-31") - new Date(b.date || "9999-12-31"));
+  return (
+    <div className="pb-16">
+      <Card>
+        <div className="flex items-center justify-between mb-4">
+          <SectionLabel icon={MapPin}>Show Calendar & Entry Deadlines ({shows.length})</SectionLabel>
+          <GoldButton onClick={startShowAdd}><Plus size={13} /> Add Show</GoldButton>
+        </div>
+
+        {editingShowId && (
+          <div className="p-4 mb-4" style={{ background: cream, border: `1px solid ${goldLight}`, borderRadius: "2px" }}>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+              <Field label="Show Name" className="col-span-2"><TextInput value={showDraft.name} onChange={(e) => setShowDraft({ ...showDraft, name: e.target.value })} /></Field>
+              <Field label="City"><TextInput value={showDraft.city} onChange={(e) => setShowDraft({ ...showDraft, city: e.target.value })} /></Field>
+              <Field label="State"><TextInput value={showDraft.state} onChange={(e) => setShowDraft({ ...showDraft, state: e.target.value })} /></Field>
+              <Field label="Show Date"><TextInput type="date" value={showDraft.date} onChange={(e) => setShowDraft({ ...showDraft, date: e.target.value })} /></Field>
+              <Field label="Entry Deadline"><TextInput type="date" value={showDraft.entryDeadline} onChange={(e) => setShowDraft({ ...showDraft, entryDeadline: e.target.value })} /></Field>
+              <Field label="Status"><Select value={showDraft.status} onChange={(e) => setShowDraft({ ...showDraft, status: e.target.value })} options={SHOW_STATUSES} /></Field>
+              <Field label="Judge"><TextInput value={showDraft.judge} onChange={(e) => setShowDraft({ ...showDraft, judge: e.target.value })} /></Field>
+            </div>
+            <Field label="Notes" className="mb-3"><TextInput value={showDraft.notes} onChange={(e) => setShowDraft({ ...showDraft, notes: e.target.value })} /></Field>
+            <div className="flex justify-end gap-2">
+              <GoldButton variant="outline" onClick={cancelShowEdit}>Cancel</GoldButton>
+              <GoldButton onClick={saveShowDraft}><Save size={13} /> Save</GoldButton>
+            </div>
+          </div>
+        )}
+
+        {sorted.length === 0 && !editingShowId ? (
+          <div className="text-sm text-neutral-400 text-center py-10">No shows added yet.</div>
+        ) : (
+          <div className="space-y-2">
+            {sorted.map((s) => {
+              const deadlineSoon = s.entryDeadline && s.status !== "Entered" && s.status !== "Going" && daysBetween(todayISO(), s.entryDeadline) <= 14 && daysBetween(todayISO(), s.entryDeadline) >= 0;
+              const deadlinePast = s.entryDeadline && daysBetween(todayISO(), s.entryDeadline) < 0 && s.status === "Maybe";
+              return (
+                <div key={s.id} className="p-3 flex items-start justify-between" style={{ background: cream, borderRadius: "2px" }}>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm" style={{ color: black, fontWeight: 600 }}>{s.name}</span>
+                      <span className="text-[10px] px-2 py-0.5 uppercase tracking-wider" style={{ border: `1px solid ${gold}`, borderRadius: "2px", color: gold }}>{s.status}</span>
+                    </div>
+                    <div className="text-xs text-neutral-500 mt-0.5">
+                      {[s.city, s.state].filter(Boolean).join(", ")} {s.date && `· ${s.date}`} {s.judge && `· Judge: ${s.judge}`}
+                    </div>
+                    {s.entryDeadline && (
+                      <div className="text-xs mt-1" style={{ color: deadlineSoon || deadlinePast ? "#B85C3F" : "#6B6B6B" }}>
+                        Entry deadline: {s.entryDeadline}
+                        {deadlineSoon && " — within 14 days, not yet entered!"}
+                        {deadlinePast && " — deadline has passed!"}
+                      </div>
+                    )}
+                    {s.notes && <div className="text-xs text-neutral-400 mt-1">{s.notes}</div>}
+                  </div>
+                  <div className="flex gap-1">
+                    <button onClick={() => startShowEdit(s)} className="text-xs px-1.5 py-0.5" style={{ color: gold }}><Pencil size={13} /></button>
+                    <button onClick={() => removeShow(s.id)} className="text-xs px-1.5 py-0.5 text-red-400 hover:text-red-600"><Trash2 size={13} /></button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+// =============================================================================
+// HERD SECTION
+// =============================================================================
+function HerdSection({ tab, herdSheep, setHerdSheep, breeding, setBreeding, lambing, setLambing, saveHerd, learnNotes, setLearnNotes, persistLearn, learnLoaded }) {
+  const [editingHerdId, setEditingHerdId] = useState(null);
+  const [editingBreedingId, setEditingBreedingId] = useState(null);
+  const [breedingDraft, setBreedingDraft] = useState(EMPTY_BREEDING());
+  const [editingLambId, setEditingLambId] = useState(null);
+  const [lambDraft, setLambDraft] = useState(EMPTY_LAMB());
+
+  const addHerdSheep = () => { const next = [...herdSheep, EMPTY_HERD_SHEEP()]; setHerdSheep(next); setEditingHerdId(next[next.length - 1].id); saveHerd(next, breeding, lambing); };
+  const updateHerdSheep = (id, patch) => { const next = herdSheep.map((s) => (s.id === id ? { ...s, ...patch } : s)); setHerdSheep(next); saveHerd(next, breeding, lambing); };
+  const removeHerdSheep = (id) => { if (!confirm("Remove this animal from the herd roster?")) return; const next = herdSheep.filter((s) => s.id !== id); setHerdSheep(next); saveHerd(next, breeding, lambing); };
+
+  const startBreedingAdd = () => { setBreedingDraft(EMPTY_BREEDING()); setEditingBreedingId("new"); };
+  const startBreedingEdit = (b) => { setBreedingDraft({ ...b }); setEditingBreedingId(b.id); };
+  const cancelBreedingEdit = () => { setEditingBreedingId(null); setBreedingDraft(EMPTY_BREEDING()); };
+  const saveBreedingDraft = () => {
+    if (!breedingDraft.ewe) return;
+    const exists = breeding.some((b) => b.id === breedingDraft.id);
+    const next = exists ? breeding.map((b) => (b.id === breedingDraft.id ? breedingDraft : b)) : [...breeding, breedingDraft];
+    setBreeding(next); saveHerd(herdSheep, next, lambing); cancelBreedingEdit();
+  };
+  const removeBreeding = (id) => { if (!confirm("Delete this breeding record?")) return; const next = breeding.filter((b) => b.id !== id); setBreeding(next); saveHerd(herdSheep, next, lambing); };
+
+  const startLambAdd = () => { setLambDraft(EMPTY_LAMB()); setEditingLambId("new"); };
+  const startLambEdit = (l) => { setLambDraft({ ...l }); setEditingLambId(l.id); };
+  const cancelLambEdit = () => { setEditingLambId(null); setLambDraft(EMPTY_LAMB()); };
+  const saveLambDraft = () => {
+    if (!lambDraft.tag && !lambDraft.dam) return;
+    const exists = lambing.some((l) => l.id === lambDraft.id);
+    const next = exists ? lambing.map((l) => (l.id === lambDraft.id ? lambDraft : l)) : [...lambing, lambDraft];
+    setLambing(next); saveHerd(herdSheep, breeding, next); cancelLambEdit();
+  };
+  const removeLamb = (id) => { if (!confirm("Delete this lambing record?")) return; const next = lambing.filter((l) => l.id !== id); setLambing(next); saveHerd(herdSheep, breeding, next); };
+
+  const addLearnNote = () => {
+    const note = { id: uid(), category: "Care", title: "", body: "" };
+    const next = [note, ...learnNotes];
+    setLearnNotes(next); persistLearn(next);
+    return note.id;
+  };
+  const updateLearnNote = (id, patch) => { const next = learnNotes.map((n) => (n.id === id ? { ...n, ...patch } : n)); setLearnNotes(next); persistLearn(next); };
+  const removeLearnNote = (id) => { if (!confirm("Delete this note?")) return; const next = learnNotes.filter((n) => n.id !== id); setLearnNotes(next); persistLearn(next); };
+
+  if (tab === "roster") return <HerdRosterTab herdSheep={herdSheep} addHerdSheep={addHerdSheep} updateHerdSheep={updateHerdSheep} removeHerdSheep={removeHerdSheep} editingHerdId={editingHerdId} setEditingHerdId={setEditingHerdId} />;
+  if (tab === "breeding") return <BreedingTab herdSheep={herdSheep} breeding={breeding} editingId={editingBreedingId} draft={breedingDraft} setDraft={setBreedingDraft} startAdd={startBreedingAdd} startEdit={startBreedingEdit} cancelEdit={cancelBreedingEdit} saveDraft={saveBreedingDraft} removeRecord={removeBreeding} />;
+  if (tab === "lambing") return <LambingTab lambing={lambing} editingId={editingLambId} draft={lambDraft} setDraft={setLambDraft} startAdd={startLambAdd} startEdit={startLambEdit} cancelEdit={cancelLambEdit} saveDraft={saveLambDraft} removeRecord={removeLamb} />;
+  return <LearnTab notes={learnNotes} loaded={learnLoaded} addNote={addLearnNote} updateNote={updateLearnNote} removeNote={removeLearnNote} />;
+}
+
+// ---- Herd Roster Tab ----
+function HerdRosterTab({ herdSheep, addHerdSheep, updateHerdSheep, removeHerdSheep, editingHerdId, setEditingHerdId }) {
+  const visibleCols = [["name", "Name"], ["sex", "Sex"], ["breed", "Breed"]];
+  const allCols = [
+    ["name", "Name", "text"], ["sex", "Sex", "select"], ["lEar", "L Ear", "text"], ["rEar", "R Ear", "text"],
+    ["birthdate", "Birthdate", "date"], ["breed", "Breed", "text"], ["sire", "Sire", "text"], ["dam", "Dam", "text"],
+    ["breeder", "Breeder", "text"], ["born", "Born (x/generation)", "text"], ["reared", "Reared (x/generation)", "text"], ["notes", "Additional Notes", "text"],
+  ];
+  return (
+    <div className="pb-16">
+      <Card>
+        <div className="flex items-center justify-between mb-4">
+          <SectionLabel>Herd Roster — Mommas & Rams ({herdSheep.length})</SectionLabel>
+          <GoldButton onClick={addHerdSheep}><Plus size={13} /> Add Animal</GoldButton>
+        </div>
+        <div className="text-[11px] text-neutral-400 mb-3">Showing Name, Sex, and Breed. All other fields are still stored — expand a row to view or edit them.</div>
+        {herdSheep.length === 0 ? (
+          <div className="text-sm text-neutral-400 text-center py-10">No herd animals added yet for this year.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${goldLight}` }}>
+                  {visibleCols.map(([key, label]) => <th key={key} className="text-left px-2 py-2 text-[10px] uppercase tracking-wider text-neutral-400 whitespace-nowrap">{label}</th>)}
+                  <th className="text-left px-2 py-2 text-[10px] uppercase tracking-wider text-neutral-400">Active</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {herdSheep.map((s) => {
+                  const editing = editingHerdId === s.id;
+                  return (
+                    <React.Fragment key={s.id}>
+                      <tr style={{ borderBottom: editing ? "none" : "1px solid #EEE9DC", background: editing ? "#FBF6E9" : "transparent" }}>
+                        {visibleCols.map(([key]) => (
+                          <td key={key} className="px-2 py-2 whitespace-nowrap"><span style={{ color: key === "name" ? black : "#555", fontWeight: key === "name" ? 600 : 400 }}>{s[key] || "—"}</span></td>
+                        ))}
+                        <td className="px-2 py-2">
+                          <button onClick={() => updateHerdSheep(s.id, { active: !s.active })} className="text-xs px-2 py-0.5" style={{ border: `1px solid ${s.active ? gold : "#DDD8CC"}`, borderRadius: "2px", color: s.active ? gold : "#999" }}>
+                            {s.active ? "Active" : "Out"}
+                          </button>
+                        </td>
+                        <td className="px-2 py-2">
+                          <div className="flex gap-1">
+                            <button onClick={() => setEditingHerdId(editing ? null : s.id)} className="text-xs px-2 py-0.5 flex items-center gap-1" style={{ color: editing ? "#4A6C4A" : gold, border: `1px solid ${editing ? "#4A6C4A" : goldLight}`, borderRadius: "2px" }}>
+                              {editing ? <><Save size={12} /> Done</> : <><Pencil size={12} /> Edit</>}
+                            </button>
+                            <button onClick={() => removeHerdSheep(s.id)} className="text-xs px-1.5 py-0.5 text-red-400 hover:text-red-600"><Trash2 size={13} /></button>
+                          </div>
+                        </td>
+                      </tr>
+                      {editing && (
+                        <tr style={{ borderBottom: "1px solid #EEE9DC", background: "#FBF6E9" }}>
+                          <td colSpan={visibleCols.length + 2} className="px-2 pb-4 pt-1">
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-3" style={{ background: "#FFFFFF", border: `1px solid ${goldLight}`, borderRadius: "2px" }}>
+                              {allCols.map(([key, label, type]) => (
+                                <Field label={label} key={key}>
+                                  {key === "sex" ? (
+                                    <Select value={s.sex} onChange={(e) => updateHerdSheep(s.id, { sex: e.target.value })} options={["Ewe", "Ram"]} />
+                                  ) : (
+                                    <TextInput type={type} value={s[key]} onChange={(e) => updateHerdSheep(s.id, { [key]: e.target.value })} />
+                                  )}
+                                </Field>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+// ---- Breeding Records Tab ----
+function BreedingTab({ herdSheep, breeding, editingId, draft, setDraft, startAdd, startEdit, cancelEdit, saveDraft, removeRecord }) {
+  const ewes = herdSheep.filter((s) => s.sex === "Ewe");
+  const bucks = herdSheep.filter((s) => s.sex === "Ram");
+  return (
+    <div className="pb-16">
+      <Card>
+        <div className="flex items-center justify-between mb-4">
+          <SectionLabel icon={Heart}>Breeding Records ({breeding.length})</SectionLabel>
+          <GoldButton onClick={startAdd}><Plus size={13} /> Add Breeding Record</GoldButton>
+        </div>
+
+        {editingId && (
+          <div className="p-4 mb-4" style={{ background: cream, border: `1px solid ${goldLight}`, borderRadius: "2px" }}>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+              <Field label="Ewe">
+                <Select value={draft.ewe} onChange={(e) => setDraft({ ...draft, ewe: e.target.value })} options={["", ...ewes.map((e) => e.name || "Unnamed")]} />
+              </Field>
+              <Field label="Ewe Tag"><TextInput value={draft.eweTag} onChange={(e) => setDraft({ ...draft, eweTag: e.target.value })} /></Field>
+              <Field label="Breeding Date"><TextInput type="date" value={draft.breedingDate} onChange={(e) => setDraft({ ...draft, breedingDate: e.target.value })} /></Field>
+              <Field label="Via"><Select value={draft.via} onChange={(e) => setDraft({ ...draft, via: e.target.value })} options={["A.I.", "Natural", "Synced Buck Bred"]} /></Field>
+              <Field label="Buck Used">
+                <Select value={draft.buck} onChange={(e) => setDraft({ ...draft, buck: e.target.value })} options={["", ...bucks.map((b) => b.name || "Unnamed"), "Other / Outside Sire"]} />
+              </Field>
+              <Field label="Expected Lambing"><div className="px-2.5 py-1.5 text-sm" style={{ color: black, fontWeight: 600 }}>{draft.breedingDate ? addDays(draft.breedingDate, 147) : "—"}</div></Field>
+              <Field label="Ultrasound"><TextInput value={draft.ultrasound} onChange={(e) => setDraft({ ...draft, ultrasound: e.target.value })} placeholder="e.g. (2) confirmed twins" /></Field>
+              <Field label="Actual Lambing"><TextInput type="date" value={draft.actualLambing} onChange={(e) => setDraft({ ...draft, actualLambing: e.target.value })} /></Field>
+              <Field label="Carried to Term"><TextInput type="number" value={draft.carriedToTerm} onChange={(e) => setDraft({ ...draft, carriedToTerm: e.target.value })} /></Field>
+              <Field label="Born Alive"><TextInput type="number" value={draft.bornAlive} onChange={(e) => setDraft({ ...draft, bornAlive: e.target.value })} /></Field>
+              <Field label="Males"><TextInput type="number" value={draft.males} onChange={(e) => setDraft({ ...draft, males: e.target.value })} /></Field>
+              <Field label="Females"><TextInput type="number" value={draft.females} onChange={(e) => setDraft({ ...draft, females: e.target.value })} /></Field>
+            </div>
+            <Field label="Notes" className="mb-3"><TextInput value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} /></Field>
+            <div className="flex justify-end gap-2"><GoldButton variant="outline" onClick={cancelEdit}>Cancel</GoldButton><GoldButton onClick={saveDraft}><Save size={13} /> Save</GoldButton></div>
+          </div>
+        )}
+
+        {breeding.length === 0 && !editingId ? (
+          <div className="text-sm text-neutral-400 text-center py-10">No breeding records yet.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${goldLight}` }}>
+                  {["Ewe", "Tag", "Bred", "Via", "Buck", "Exp. Lambing", "Ultrasound", "Actual Lambing", "CTT", "Born Alive", "M", "F", ""].map((h) => (
+                    <th key={h} className="text-left px-2 py-2 text-[10px] uppercase tracking-wider text-neutral-400 whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {breeding.map((b) => (
+                  <tr key={b.id} style={{ borderBottom: "1px solid #EEE9DC" }}>
+                    <td className="px-2 py-1.5" style={{ fontWeight: 600 }}>{b.ewe || "—"}</td>
+                    <td className="px-2 py-1.5">{b.eweTag || "—"}</td>
+                    <td className="px-2 py-1.5">{b.breedingDate || "—"}</td>
+                    <td className="px-2 py-1.5">{b.via || "—"}</td>
+                    <td className="px-2 py-1.5">{b.buck || "—"}</td>
+                    <td className="px-2 py-1.5">{b.breedingDate ? addDays(b.breedingDate, 147) : "—"}</td>
+                    <td className="px-2 py-1.5">{b.ultrasound || "—"}</td>
+                    <td className="px-2 py-1.5">{b.actualLambing || "—"}</td>
+                    <td className="px-2 py-1.5">{b.carriedToTerm || "—"}</td>
+                    <td className="px-2 py-1.5">{b.bornAlive || "—"}</td>
+                    <td className="px-2 py-1.5">{b.males || "—"}</td>
+                    <td className="px-2 py-1.5">{b.females || "—"}</td>
+                    <td className="px-2 py-1.5">
+                      <div className="flex gap-1">
+                        <button onClick={() => startEdit(b)} className="text-xs px-1.5 py-0.5" style={{ color: gold }}><Pencil size={13} /></button>
+                        <button onClick={() => removeRecord(b.id)} className="text-xs px-1.5 py-0.5 text-red-400 hover:text-red-600"><Trash2 size={13} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+// ---- Lambing Records Tab ----
+function LambingTab({ lambing, editingId, draft, setDraft, startAdd, startEdit, cancelEdit, saveDraft, removeRecord }) {
+  return (
+    <div className="pb-16">
+      <Card>
+        <div className="flex items-center justify-between mb-4">
+          <SectionLabel icon={Baby}>Lambing Records ({lambing.length})</SectionLabel>
+          <GoldButton onClick={startAdd}><Plus size={13} /> Add Lamb</GoldButton>
+        </div>
+
+        {editingId && (
+          <div className="p-4 mb-4" style={{ background: cream, border: `1px solid ${goldLight}`, borderRadius: "2px" }}>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+              <Field label="Tag"><TextInput value={draft.tag} onChange={(e) => setDraft({ ...draft, tag: e.target.value })} /></Field>
+              <Field label="Sex"><Select value={draft.sex} onChange={(e) => setDraft({ ...draft, sex: e.target.value })} options={["Male", "Female"]} /></Field>
+              <Field label="Sire"><TextInput value={draft.sire} onChange={(e) => setDraft({ ...draft, sire: e.target.value })} /></Field>
+              <Field label="Dam"><TextInput value={draft.dam} onChange={(e) => setDraft({ ...draft, dam: e.target.value })} /></Field>
+              <Field label="DOB"><TextInput type="date" value={draft.dob} onChange={(e) => setDraft({ ...draft, dob: e.target.value })} /></Field>
+              <Field label="Sold To"><TextInput value={draft.soldTo} onChange={(e) => setDraft({ ...draft, soldTo: e.target.value })} /></Field>
+              <Field label="Price"><TextInput value={draft.price} onChange={(e) => setDraft({ ...draft, price: e.target.value })} /></Field>
+              <Field label="Showed By"><TextInput value={draft.showedBy} onChange={(e) => setDraft({ ...draft, showedBy: e.target.value })} /></Field>
+            </div>
+            <Field label="Additional Notes" className="mb-3"><TextInput value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} /></Field>
+            <div className="flex justify-end gap-2"><GoldButton variant="outline" onClick={cancelEdit}>Cancel</GoldButton><GoldButton onClick={saveDraft}><Save size={13} /> Save</GoldButton></div>
+          </div>
+        )}
+
+        {lambing.length === 0 && !editingId ? (
+          <div className="text-sm text-neutral-400 text-center py-10">No lambing records yet.</div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr style={{ borderBottom: `1px solid ${goldLight}` }}>
+                  {["Tag", "Sex", "Sire", "Dam", "DOB", "Sold To", "Price", "Showed By", "Notes", ""].map((h) => (
+                    <th key={h} className="text-left px-2 py-2 text-[10px] uppercase tracking-wider text-neutral-400 whitespace-nowrap">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {lambing.map((l) => (
+                  <tr key={l.id} style={{ borderBottom: "1px solid #EEE9DC" }}>
+                    <td className="px-2 py-1.5" style={{ fontWeight: 600 }}>{l.tag || "—"}</td>
+                    <td className="px-2 py-1.5">{l.sex}</td>
+                    <td className="px-2 py-1.5">{l.sire || "—"}</td>
+                    <td className="px-2 py-1.5">{l.dam || "—"}</td>
+                    <td className="px-2 py-1.5">{l.dob || "—"}</td>
+                    <td className="px-2 py-1.5">{l.soldTo || "—"}</td>
+                    <td className="px-2 py-1.5">{l.price || "—"}</td>
+                    <td className="px-2 py-1.5">{l.showedBy || "—"}</td>
+                    <td className="px-2 py-1.5 text-neutral-500">{l.notes || "—"}</td>
+                    <td className="px-2 py-1.5">
+                      <div className="flex gap-1">
+                        <button onClick={() => startEdit(l)} className="text-xs px-1.5 py-0.5" style={{ color: gold }}><Pencil size={13} /></button>
+                        <button onClick={() => removeRecord(l.id)} className="text-xs px-1.5 py-0.5 text-red-400 hover:text-red-600"><Trash2 size={13} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+// ---- Learn Tab ----
+function LearnTab({ notes, loaded, addNote, updateNote, removeNote }) {
+  const [editingId, setEditingId] = useState(null);
+  const [filter, setFilter] = useState("All");
+  const categories = ["All", "Breeding", "Lambing", "Care", "Standards"];
+
+  const handleAdd = () => { const id = addNote(); setEditingId(id); setFilter("All"); };
+  const filtered = notes.filter((n) => filter === "All" || n.category === filter);
+
+  return (
+    <div className="pb-16">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <SectionLabel icon={BookOpen}>Learn — Breeding, Lambing & Care Standards</SectionLabel>
+        <GoldButton onClick={handleAdd}><Plus size={13} /> Add Note</GoldButton>
+      </div>
+
+      <div className="flex flex-wrap gap-2 mb-5">
+        {categories.map((c) => (
+          <button key={c} onClick={() => setFilter(c)} className="px-3 py-1 text-xs transition-colors"
+            style={{ border: `1px solid ${filter === c ? gold : "#DDD8CC"}`, borderRadius: "2px", background: filter === c ? black : "#FFFFFF", color: filter === c ? goldLight : "#555", fontWeight: filter === c ? 600 : 400 }}>
+            {c}
+          </button>
+        ))}
+      </div>
+
+      <div className="mb-5 px-3 py-2 text-xs flex items-center gap-2" style={{ background: cream, border: `1px solid ${goldLight}`, borderRadius: "2px", color: "#6B6B6B" }}>
+        <ExternalLink size={12} style={{ color: gold }} />
+        For specialized breeding/reproduction help (AI, ET, IVF), Reproductive Specialty Group is a useful resource: reprospecialty.com
+      </div>
+
+      {!loaded ? (
+        <div className="flex items-center gap-2 py-10 justify-center text-neutral-400 text-sm"><Loader2 size={16} className="animate-spin" /> Loading notes…</div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {filtered.map((n) => {
+            const editing = editingId === n.id;
+            return (
+              <div key={n.id} className="p-4" style={{ background: "#FFFFFF", border: `1px solid ${goldLight}`, borderRadius: "2px" }}>
+                {editing ? (
+                  <div className="space-y-2">
+                    <Select value={n.category} onChange={(e) => updateNote(n.id, { category: e.target.value })} options={["Breeding", "Lambing", "Care", "Standards"]} />
+                    <TextInput value={n.title} onChange={(e) => updateNote(n.id, { title: e.target.value })} placeholder="Title" />
+                    <TextArea value={n.body} onChange={(e) => updateNote(n.id, { body: e.target.value })} placeholder="Notes..." />
+                    <div className="flex justify-end gap-2">
+                      <GoldButton variant="outline" onClick={() => removeNote(n.id)}><Trash2 size={12} /> Delete</GoldButton>
+                      <GoldButton onClick={() => setEditingId(null)}><Save size={12} /> Done</GoldButton>
+                    </div>
+                  </div>
+                ) : (
+                  <div onClick={() => setEditingId(n.id)} className="cursor-pointer">
+                    <span className="text-[10px] tracking-[0.14em] uppercase font-semibold px-2 py-0.5" style={{ color: gold, border: `1px solid ${goldLight}`, borderRadius: "2px" }}>{n.category}</span>
+                    <h3 className="text-lg mt-2 mb-1" style={{ fontFamily: "'Playfair Display', serif", color: black }}>{n.title || "Untitled"}</h3>
+                    <p className="text-sm text-neutral-600 leading-relaxed">{n.body}</p>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
