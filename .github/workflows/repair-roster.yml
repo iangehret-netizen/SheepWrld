@@ -17,17 +17,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Patch roster save behavior
+      - name: Patch roster save behavior and remove obsolete note
         shell: python
         run: |
           from pathlib import Path
           p=Path('index.html'); s=p.read_text()
+          # Remove the obsolete explanatory box from the actual rendered exhibitor form.
+          s=s.replace('<div class="notice">Save the exhibitor first. Sheep are assigned separately from the Sheep Roster.</div>','')
+          s=s.replace('Save the exhibitor first. Sheep are assigned separately from the Sheep Roster.','')
           bridge='window.__gehret = { S, render, closeModal, toast };'
           if bridge not in s: s=s.replace('render();',bridge+'\nrender();',1)
           repair=r'''<script>
           (function(){
-            const NOTE='Save the exhibitor first; sheep can be assigned afterward.';
-            function clean(){document.querySelectorAll('.notice').forEach(e=>{if((e.textContent||'').includes(NOTE))e.remove();});}
+            function clean(){document.querySelectorAll('.notice').forEach(e=>{if((e.textContent||'').toLowerCase().includes('save the exhibitor first'))e.remove();});}
             window.saveEx=function(id){const g=window.__gehret;if(!g)return;try{const d=id?g.S.exhibitors.find(e=>e.id===id):null,name=(document.getElementById('ex_name')?.value||'').trim();if(!name){alert('Please enter an exhibitor name.');return;}const e={id:id||Math.random().toString(36).slice(2,10),year:g.S.year,name,age:document.getElementById('ex_age')?.value||'',county:document.getElementById('ex_county')?.value||'',numSheep:document.getElementById('ex_num')?.value||'',targetShow:document.getElementById('ex_target')?.value||'',targetShowDate:document.getElementById('ex_date')?.value||'',sheepIds:d?.sheepIds||[]};const i=g.S.exhibitors.findIndex(x=>x.id===e.id);if(i<0)g.S.exhibitors.push(e);else g.S.exhibitors[i]=e;localStorage.setItem('gehret-sheep-co-v2',JSON.stringify(g.S));g.closeModal();g.toast('Exhibitor saved');g.render();}catch(err){console.error(err);alert('Save failed. Please refresh the app and try again.');}};
             window.saveSheep=function(id){const g=window.__gehret;if(!g)return;try{const d=g.S.sheep.find(s=>s.id===id),name=(document.getElementById('s_name')?.value||'').trim();if(!name){alert('Please enter a sheep name.');return;}const s={id:id||Math.random().toString(36).slice(2,10),year:g.S.year,name,sex:document.getElementById('s_sex')?.value||'Wether',lEar:document.getElementById('s_le')?.value||'',rEar:document.getElementById('s_re')?.value||'',birthdate:document.getElementById('s_birth')?.value||'',breed:document.getElementById('s_breed')?.value||'',sire:document.getElementById('s_sire')?.value||'',dam:document.getElementById('s_dam')?.value||'',breeder:document.getElementById('s_breeder')?.value||'',price:document.getElementById('s_price')?.value||'',showman:document.getElementById('s_showman')?.value||'',county:document.getElementById('s_county')?.value||'',targetWeight:document.getElementById('s_tw')?.value||'',targetDate:document.getElementById('s_td')?.value||'',active:(document.getElementById('s_active')?.value||'true')==='true',notes:document.getElementById('s_notes')?.value||''};const i=g.S.sheep.findIndex(x=>x.id===s.id);if(i<0)g.S.sheep.push(s);else g.S.sheep[i]=s;if(d?.showman&&d.showman!==s.showman){const p=g.S.exhibitors.find(e=>e.id===d.showman);if(p)p.sheepIds=(p.sheepIds||[]).filter(x=>x!==s.id);}const ex=g.S.exhibitors.find(e=>e.id===s.showman);if(ex){ex.sheepIds=ex.sheepIds||[];if(!ex.sheepIds.includes(s.id))ex.sheepIds.push(s.id);}localStorage.setItem('gehret-sheep-co-v2',JSON.stringify(g.S));g.closeModal();g.toast('Sheep saved');g.render();}catch(err){console.error(err);alert('Save failed. Please refresh the app and try again.');}};
             clean();new MutationObserver(clean).observe(document.body,{childList:true,subtree:true});
