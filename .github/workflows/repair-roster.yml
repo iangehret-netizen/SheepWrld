@@ -1,0 +1,71 @@
+name: Repair roster save
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'index.html'
+      - '.github/workflows/repair-roster.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.event.head_commit.message != 'Repair roster save [skip ci]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Patch roster save behavior
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('index.html')
+          s = p.read_text()
+          patch = r'''<script>
+          (function(){
+            const NOTE_TEXT='Save the exhibitor first; sheep can be assigned afterward.';
+            function removeRosterNote(){
+              document.querySelectorAll('.notice').forEach(el=>{ if((el.textContent||'').includes(NOTE_TEXT)) el.remove(); });
+            }
+            window.saveEx=function(id){
+              try{
+                const name=(document.getElementById('ex_name')?.value||'').trim();
+                if(!name){ alert('Please enter an exhibitor name.'); return; }
+                const old=(window.S.exhibitors||[]).find(e=>e.id===id);
+                const e={id,year:window.S.year,name,age:document.getElementById('ex_age')?.value||'',county:document.getElementById('ex_county')?.value||'',numSheep:document.getElementById('ex_num')?.value||'',targetShow:document.getElementById('ex_target')?.value||'',targetShowDate:document.getElementById('ex_date')?.value||'',sheepIds:old?.sheepIds||[]};
+                const i=window.S.exhibitors.findIndex(x=>x.id===id); if(i<0)window.S.exhibitors.push(e);else window.S.exhibitors[i]=e;
+                localStorage.setItem('gehret-sheep-co-v2',JSON.stringify(window.S)); window.closeModal(); window.toast('Exhibitor saved'); window.render();
+              }catch(err){console.error(err);alert('The exhibitor could not be saved. Please refresh the app and try again.');}
+            };
+            window.saveSheep=function(id){
+              try{
+                const name=(document.getElementById('s_name')?.value||'').trim();
+                if(!name){ alert('Please enter a sheep name.'); return; }
+                const old=(window.S.sheep||[]).find(s=>s.id===id);
+                const s={id,year:window.S.year,name,sex:document.getElementById('s_sex')?.value||'Wether',lEar:document.getElementById('s_le')?.value||'',rEar:document.getElementById('s_re')?.value||'',birthdate:document.getElementById('s_birth')?.value||'',breed:document.getElementById('s_breed')?.value||'',sire:document.getElementById('s_sire')?.value||'',dam:document.getElementById('s_dam')?.value||'',breeder:document.getElementById('s_breeder')?.value||'',price:document.getElementById('s_price')?.value||'',showman:document.getElementById('s_showman')?.value||'',county:document.getElementById('s_county')?.value||'',targetWeight:document.getElementById('s_tw')?.value||'',targetDate:document.getElementById('s_td')?.value||'',active:(document.getElementById('s_active')?.value||'true')==='true',notes:document.getElementById('s_notes')?.value||''};
+                const i=window.S.sheep.findIndex(x=>x.id===id); if(i<0)window.S.sheep.push(s);else window.S.sheep[i]=s;
+                if(old?.showman&&old.showman!==s.showman){const p=window.S.exhibitors.find(e=>e.id===old.showman);if(p)p.sheepIds=(p.sheepIds||[]).filter(x=>x!==id);}
+                const ex=window.S.exhibitors.find(e=>e.id===s.showman);if(ex){ex.sheepIds=ex.sheepIds||[];if(!ex.sheepIds.includes(id))ex.sheepIds.push(id);}
+                localStorage.setItem('gehret-sheep-co-v2',JSON.stringify(window.S)); window.closeModal();window.toast('Sheep saved');window.render();
+              }catch(err){console.error(err);alert('The sheep could not be saved. Please refresh the app and try again.');}
+            };
+            const oldRender=window.render;
+            window.render=function(){oldRender();setTimeout(removeRosterNote,0);};
+            setTimeout(removeRosterNote,0);
+          })();
+          </script>'''
+          if 'Gehret Sheep Co roster save repair' not in s:
+              patch=patch.replace('<script>','<script>/* Gehret Sheep Co roster save repair */',1)
+              s=s.replace('</body>',patch+'</body>')
+              p.write_text(s)
+
+      - name: Commit repaired app
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add index.html
+          git diff --cached --quiet || git commit -m 'Repair roster save [skip ci]'
+          git push
